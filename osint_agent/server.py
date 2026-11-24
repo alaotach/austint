@@ -5,23 +5,22 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, AsyncGenerator
 
-from fastapi import BackgroundTasks, FastAPI, HTTPException, Query, status
+from fastapi import BackgroundTasks, FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from osint_agent.agent import OSINTAgent, export_graph_to_json
+from osint_agent.agent import OSINTAgent
 from osint_agent.llm import get_llm_client
 from osint_agent.planner import LLMPlanner, RuleBasedPlanner
 from osint_agent.resolver import BaselineWeightedResolver, LearnedResolver
-from osint_agent.schema import Entity, EntityType, Scope
+from osint_agent.schema import EntityType, Scope
 from osint_agent.seeds import parse_seeds
 from osint_agent.tools import TOOL_REGISTRY
 

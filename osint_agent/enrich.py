@@ -9,7 +9,6 @@ import re
 import socket
 import urllib.parse
 import urllib.robotparser
-from typing import Any
 
 import httpx
 

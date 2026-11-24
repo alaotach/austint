@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-import json
 import logging
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
 from pydantic import BaseModel, Field
 
+from osint_agent.audit import write_audit_event as _log_audit_event
 from osint_agent.extractor import extract_entities, is_sensitive
 from osint_agent.llm import LLMClient
 from osint_agent.schema import Entity, EntityType
@@ -47,33 +46,6 @@ class SeedParseResult(BaseModel):
     """Pydantic model validating LLM seed parser output structure."""
     target_kind: str | None = None
     entities: list[ParsedEntityItem] = Field(default_factory=list)
-
-
-def _log_audit_event(
-    event_type: str,
-    details: dict[str, Any],
-    audit_path: str | Path | None = None,
-    callback: Callable[[str, dict[str, Any]], None] | None = None,
-) -> None:
-    """Helper to record audit event to file and/or callback."""
-    if callback:
-        try:
-            callback(event_type, details)
-        except Exception:
-            pass
-
-    path = audit_path or Path("audit.jsonl")
-    try:
-        entry = {
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "event": event_type,
-            "data": details,
-            "details": details,
-        }
-        with open(path, "a", encoding="utf-8") as f:
-            f.write(json.dumps(entry) + "\n")
-    except Exception as exc:
-        logger.debug("Could not append seed audit log to %s: %s", path, exc)
 
 
 def parse_seeds(

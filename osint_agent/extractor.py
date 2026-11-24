@@ -10,7 +10,6 @@ from osint_agent.schema import (
     SENSITIVE_ATTRIBUTE_PATTERNS,
     Entity,
     EntityType,
-    sanitize_attributes,
 )
 
 logger = logging.getLogger(__name__)

@@ -6,7 +6,6 @@ import heapq
 import itertools
 import json
 import logging
-import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -14,32 +13,15 @@ from typing import Any
 import httpx
 import networkx as nx
 
+from osint_agent.audit import AuditLogger
 from osint_agent.enrich import fetch_profile_meta
 from osint_agent.extractor import extract_entities
 from osint_agent.planner import Planner, RuleBasedPlanner
 from osint_agent.resolver import BaseResolver, BaselineWeightedResolver
-from osint_agent.schema import Entity, EntityType, Hit, Scope
+from osint_agent.schema import Entity, EntityType, Scope
 from osint_agent.tools import TOOL_REGISTRY, set_audit_callback
 
 logger = logging.getLogger(__name__)
-
-
-class AuditLogger:
-    """Thread-safe append-only audit logger writing to audit.jsonl."""
-
-    def __init__(self, log_path: str | Path = "audit.jsonl") -> None:
-        self.log_path = Path(log_path)
-        self.log_path.parent.mkdir(parents=True, exist_ok=True)
-
-    def log_event(self, event_type: str, details: dict[str, Any]) -> None:
-        """Append an event record as a JSON line."""
-        record = {
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "event": event_type,
-            "data": details,
-        }
-        with open(self.log_path, "a", encoding="utf-8") as f:
-            f.write(json.dumps(record, default=str) + "\n")
 
 
 class OSINTAgent:

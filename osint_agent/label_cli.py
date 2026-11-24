@@ -6,9 +6,8 @@ import argparse
 import json
 import sys
 from pathlib import Path
-from typing import Any
 
-from osint_agent.dataset import LabeledPair, save_pairs
+from osint_agent.dataset import LabeledPair
 from osint_agent.features import TargetContext
 from osint_agent.schema import EntityType, Hit
 

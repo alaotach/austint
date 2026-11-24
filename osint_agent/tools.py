@@ -11,7 +11,6 @@ import shutil
 import sys
 import tempfile
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable
 
 import httpx
@@ -39,6 +38,8 @@ def set_audit_callback(callback: Callable[[str, dict[str, Any]], None] | None) -
 
 def log_audit_event(event_type: str, details: dict[str, Any]) -> None:
     """Log an audit event via registered callback or fallback JSONL."""
+    from osint_agent.audit import write_audit_event
+
     if _audit_callback is not None:
         try:
             _audit_callback(event_type, details)
@@ -46,16 +47,19 @@ def log_audit_event(event_type: str, details: dict[str, Any]) -> None:
         except Exception as err:
             logger.debug("Failed calling audit callback: %s", err)
 
-    try:
-        record = {
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "event": event_type,
-            "data": details,
-        }
-        with open("audit.jsonl", "a", encoding="utf-8") as f:
-            f.write(json.dumps(record, default=str) + "\n")
-    except Exception:
-        pass
+    write_audit_event(event_type, details)
+
+
+def _normalize_domain(value: str) -> str:
+    """Strip URL scheme, wildcards, and path fragments from a domain string."""
+    domain = value.strip().lower()
+    domain = re.sub(r"^https?://", "", domain)
+    return re.sub(r"^\*\.", "", domain).split("/")[0]
+
+
+def _find_cli_binary(name: str) -> str | None:
+    """Locate an external CLI binary on PATH or inside the active Python environment."""
+    return shutil.which(name) or shutil.which(name, path=os.path.join(sys.prefix, "bin"))
 
 
 @dataclass
@@ -114,9 +118,7 @@ get_tools_for_type = get_tools_for_entity
 )
 async def collect_crtsh(entity: Entity, client: httpx.AsyncClient) -> list[Hit]:
     """Extract public subdomains from Certificate Transparency logs with fast DNS fallback."""
-    domain = entity.value.strip().lower()
-    domain = re.sub(r"^https?://", "", domain)
-    domain = re.sub(r"^\*\.", "", domain).split("/")[0]
+    domain = _normalize_domain(entity.value)
 
     url = f"https://crt.sh/?q=%.{domain}&output=json"
     headers = {"User-Agent": DEFAULT_USER_AGENT, "Accept": "application/json"}
@@ -220,9 +222,7 @@ async def collect_domain_intel(entity: Entity, client: httpx.AsyncClient) -> lis
     if entity.depth > 0 and any("nameserver_for" in p for p in entity.provenance):
         return []
 
-    domain = entity.value.strip().lower()
-    domain = re.sub(r"^https?://", "", domain)
-    domain = re.sub(r"^\*\.", "", domain).split("/")[0]
+    domain = _normalize_domain(entity.value)
 
     hits: list[Hit] = []
     seen_values: set[str] = set()
@@ -660,7 +660,7 @@ def parse_maigret_json(data: Any, username: str, target_id: str) -> list[Hit]:
 )
 async def collect_sherlock(entity: Entity, client: httpx.AsyncClient) -> list[Hit]:
     """Execute sherlock CLI in isolated temp directory to discover public profile accounts."""
-    binary = shutil.which("sherlock") or shutil.which("sherlock", path=os.path.join(sys.prefix, "bin"))
+    binary = _find_cli_binary("sherlock")
     if not binary:
         logger.warning("sherlock binary is not installed on PATH.")
         log_audit_event("tool_unavailable", {"tool": "sherlock", "reason": "binary not found on PATH"})
@@ -699,7 +699,7 @@ async def collect_sherlock(entity: Entity, client: httpx.AsyncClient) -> list[Hi
 )
 async def collect_maigret(entity: Entity, client: httpx.AsyncClient) -> list[Hit]:
     """Execute maigret CLI in isolated temp directory to extract rich profile dossiers."""
-    binary = shutil.which("maigret") or shutil.which("maigret", path=os.path.join(sys.prefix, "bin"))
+    binary = _find_cli_binary("maigret")
     if not binary:
         logger.warning("maigret binary is not installed on PATH.")
         log_audit_event("tool_unavailable", {"tool": "maigret", "reason": "binary not found on PATH"})

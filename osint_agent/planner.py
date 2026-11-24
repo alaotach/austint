@@ -2,15 +2,14 @@
 
 from __future__ import annotations
 
-import json
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Protocol, runtime_checkable
 
+from osint_agent.audit import write_audit_event as _log_planner_audit
 from osint_agent.llm import LLMClient
-from osint_agent.schema import Entity, EntityType
+from osint_agent.schema import Entity
 from osint_agent.tools import TOOL_REGISTRY, get_tools_for_type
 
 logger = logging.getLogger(__name__)
@@ -35,33 +34,6 @@ class Planner(Protocol):
     ) -> list[PlanStep]:
         """Produce ordered list of tools to execute against candidate entity."""
         ...
-
-
-def _log_planner_audit(
-    event_type: str,
-    details: dict[str, Any],
-    audit_path: str | Path | None = None,
-    callback: Callable[[str, dict[str, Any]], None] | None = None,
-) -> None:
-    """Helper writing planner audit records."""
-    if callback:
-        try:
-            callback(event_type, details)
-        except Exception:
-            pass
-
-    path = audit_path or Path("audit.jsonl")
-    try:
-        entry = {
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "event": event_type,
-            "data": details,
-            "details": details,
-        }
-        with open(path, "a", encoding="utf-8") as f:
-            f.write(json.dumps(entry) + "\n")
-    except Exception as exc:
-        logger.debug("Failed writing planner audit log to %s: %s", path, exc)
 
 
 class RuleBasedPlanner:
