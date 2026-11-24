@@ -10,9 +10,9 @@ import pytest
 import respx
 from fastapi.testclient import TestClient
 
-from osint_agent.schema import EntityType, Hit
-from osint_agent.server import JOBS, app
-from osint_agent.tools import TOOL_REGISTRY
+from osint_agent.core.schema import EntityType, Hit
+from osint_agent.api.server import JOBS, app
+from osint_agent.collectors.tools import TOOL_REGISTRY
 
 client = TestClient(app)
 
@@ -24,7 +24,7 @@ def test_dashboard_ui_serving() -> None:
     assert "Intelligent OSINT" in resp.text
     assert "g6.min.js" in resp.text
 
-    static_resp = client.get("/static/style.css")
+    static_resp = client.get("/static/css/style.css")
     assert static_resp.status_code == 200
     assert "--node-domain" in static_resp.text
 
@@ -144,7 +144,7 @@ async def test_api_investigation_lifecycle() -> None:
 def test_api_stream_events() -> None:
     """GET /api/investigate/{job_id}/stream must stream Server-Sent Events."""
     # Pre-populate a job
-    from osint_agent.server import JobState
+    from osint_agent.api.server import JobState
     dummy_job = JobState("test_stream_job", {})
     dummy_job.append_event("test_event_1", {"msg": "hello"})
     dummy_job.status = "completed"

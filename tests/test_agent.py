@@ -9,10 +9,10 @@ import httpx
 import pytest
 import respx
 
-from osint_agent.agent import OSINTAgent, export_graph_to_json
-from osint_agent.resolver import BaselineWeightedResolver
-from osint_agent.schema import Entity, EntityType, Hit, Scope, sanitize_attributes
-from osint_agent.tools import collect_crtsh, collect_nominatim, collect_wikidata
+from osint_agent.core.agent import OSINTAgent, export_graph_to_json
+from osint_agent.ml.resolver import BaselineWeightedResolver
+from osint_agent.core.schema import Entity, EntityType, Hit, Scope, sanitize_attributes
+from osint_agent.collectors.tools import collect_crtsh, collect_nominatim, collect_wikidata
 
 
 @pytest.mark.asyncio
@@ -351,7 +351,7 @@ async def test_tool_wikidata_collector() -> None:
 @respx.mock
 async def test_tool_domain_intel_collector() -> None:
     """domain_intel collector should parse RDAP registrar, nameservers, HTTP headers, and HTML metadata."""
-    from osint_agent.tools import collect_domain_intel
+    from osint_agent.collectors.tools import collect_domain_intel
 
     respx.get("https://rdap.org/domain/mockcorp.io").mock(
         return_value=httpx.Response(

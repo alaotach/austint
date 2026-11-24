@@ -14,7 +14,7 @@ from urllib.parse import urlparse
 
 import httpx
 
-from osint_agent.schema import EntityType, Hit
+from osint_agent.core.schema import EntityType, Hit
 
 logger = logging.getLogger(__name__)
 

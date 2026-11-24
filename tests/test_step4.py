@@ -10,19 +10,19 @@ import httpx
 import pytest
 import respx
 
-from osint_agent.agent import OSINTAgent
-from osint_agent.llm import (
+from osint_agent.core.agent import OSINTAgent
+from osint_agent.llm.client import (
     AnthropicClient,
     FakeClient,
     GeminiClient,
     LLMBudgetExceededError,
     strip_code_fences,
 )
-from osint_agent.planner import LLMPlanner, PlanStep, RuleBasedPlanner
-from osint_agent.resolver import BaselineWeightedResolver
-from osint_agent.schema import Entity, EntityType, Scope
-from osint_agent.seeds import parse_seeds
-from osint_agent.tools import TOOL_REGISTRY
+from osint_agent.llm.planner import LLMPlanner, PlanStep, RuleBasedPlanner
+from osint_agent.ml.resolver import BaselineWeightedResolver
+from osint_agent.core.schema import Entity, EntityType, Scope
+from osint_agent.llm.seeds import parse_seeds
+from osint_agent.collectors.tools import TOOL_REGISTRY
 
 
 # ---------------------------------------------------------------------------

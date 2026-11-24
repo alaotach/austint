@@ -8,8 +8,8 @@ from typing import Any
 
 from rapidfuzz import fuzz
 
-from osint_agent.embeddings import compute_text_similarity
-from osint_agent.schema import Entity, EntityType, Hit
+from osint_agent.ml.embeddings import compute_text_similarity
+from osint_agent.core.schema import Entity, EntityType, Hit
 
 FEATURE_NAMES: list[str] = [
     "name_sim",

@@ -15,10 +15,10 @@ import numpy as np
 from sklearn.metrics import classification_report, f1_score, precision_score, recall_score
 from sklearn.model_selection import train_test_split
 
-from osint_agent.dataset import build_xy, generate_synthetic_pairs
-from osint_agent.features import FEATURE_NAMES, TargetContext
-from osint_agent.resolver import BaselineWeightedResolver, LearnedResolver
-from osint_agent.schema import Hit
+from osint_agent.ml.dataset import build_xy, generate_synthetic_pairs
+from osint_agent.ml.features import FEATURE_NAMES, TargetContext
+from osint_agent.ml.resolver import BaselineWeightedResolver, LearnedResolver
+from osint_agent.core.schema import Hit
 
 
 def run_experiment(

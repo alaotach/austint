@@ -15,9 +15,9 @@ if str(PROJECT_ROOT) not in sys.path:
 
 import httpx
 
-from osint_agent.agent import OSINTAgent, export_graph_to_json
-from osint_agent.resolver import LearnedResolver
-from osint_agent.schema import EntityType, Scope
+from osint_agent.core.agent import OSINTAgent, export_graph_to_json
+from osint_agent.ml.resolver import LearnedResolver
+from osint_agent.core.schema import EntityType, Scope
 
 
 async def run_demo(username: str = "torvalds") -> None:
@@ -96,7 +96,7 @@ async def run_demo(username: str = "torvalds") -> None:
         if model_path.exists():
             resolver = LearnedResolver.load(model_path)
         else:
-            from osint_agent.dataset import build_xy, generate_synthetic_pairs
+            from osint_agent.ml.dataset import build_xy, generate_synthetic_pairs
 
             pairs = generate_synthetic_pairs(n=300, seed=42)
             X, y, _ = build_xy(pairs)

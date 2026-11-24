@@ -8,10 +8,10 @@ from typing import Any, Callable
 
 from pydantic import BaseModel, Field
 
-from osint_agent.audit import write_audit_event as _log_audit_event
-from osint_agent.extractor import extract_entities, is_sensitive
-from osint_agent.llm import LLMClient
-from osint_agent.schema import Entity, EntityType
+from osint_agent.core.audit import write_audit_event as _log_audit_event
+from osint_agent.collectors.extractor import extract_entities, is_sensitive
+from osint_agent.llm.client import LLMClient
+from osint_agent.core.schema import Entity, EntityType
 
 logger = logging.getLogger(__name__)
 

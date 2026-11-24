@@ -98,7 +98,7 @@ python -m osint_agent.cli --kind username --value octocat --consent --resolver l
 ### 4. Running the REST API Server
 Start the FastAPI server with live event streaming and Cytoscape.js graph output:
 ```bash
-uvicorn osint_agent.server:app --reload --port 8000
+uvicorn osint_agent.api.server:app --reload --port 8000
 ```
 Interactive API docs available at: `http://localhost:8000/docs`
 

@@ -18,11 +18,11 @@ if str(PROJECT_ROOT) not in sys.path:
 import httpx
 import respx
 
-from osint_agent.agent import OSINTAgent
-from osint_agent.llm import FakeClient, get_llm_client
-from osint_agent.planner import LLMPlanner, RuleBasedPlanner
-from osint_agent.resolver import BaselineWeightedResolver
-from osint_agent.schema import EntityType, Scope
+from osint_agent.core.agent import OSINTAgent
+from osint_agent.llm.client import FakeClient, get_llm_client
+from osint_agent.llm.planner import LLMPlanner, RuleBasedPlanner
+from osint_agent.ml.resolver import BaselineWeightedResolver
+from osint_agent.core.schema import EntityType, Scope
 
 RECORDED_RESPONSES = [
     # Plan for domain: example.com
@@ -66,8 +66,8 @@ async def run_scenario(
 
     # Mock external HTTP endpoints and subprocesses so benchmark is 100% offline and deterministic
     from unittest.mock import AsyncMock
-    from osint_agent.schema import Hit
-    from osint_agent.tools import TOOL_REGISTRY
+    from osint_agent.core.schema import Hit
+    from osint_agent.collectors.tools import TOOL_REGISTRY
 
     mock_sherlock_hits = [
         Hit(

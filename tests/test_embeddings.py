@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import pytest
 
-from osint_agent import embeddings
+from osint_agent.ml import embeddings
 
 
 @pytest.fixture(autouse=True)
@@ -26,7 +26,7 @@ def test_embedding_cache_hit() -> None:
     dummy_vec /= np.linalg.norm(dummy_vec)
     mock_model.encode.return_value = dummy_vec
 
-    with patch("osint_agent.embeddings.get_model", return_value=mock_model):
+    with patch("osint_agent.ml.embeddings.get_model", return_value=mock_model):
         text = "Cybersecurity intelligence and OSINT analysis"
 
         # First call: cache miss, calls encode
@@ -44,7 +44,7 @@ def test_embedding_cache_hit() -> None:
 def test_embedding_fallback_to_tfidf() -> None:
     """When SentenceTransformer fails or is unavailable, fallback to TF-IDF cosine."""
     # Force get_model to return None (model failure)
-    with patch("osint_agent.embeddings.get_model", return_value=None):
+    with patch("osint_agent.ml.embeddings.get_model", return_value=None):
         text1 = "artificial intelligence machine learning algorithm"
         text2 = "machine learning and deep neural network algorithms"
         text3 = "completely unrelated acoustic music guitar strings"
@@ -58,7 +58,7 @@ def test_embedding_fallback_to_tfidf() -> None:
 
 def test_embedding_empty_text_handling() -> None:
     """Empty or whitespace-only strings must return None/0.0 without errors."""
-    with patch("osint_agent.embeddings.get_model", return_value=None):
+    with patch("osint_agent.ml.embeddings.get_model", return_value=None):
         assert embeddings.get_embedding("") is None
         assert embeddings.get_embedding("   ") is None
         assert embeddings.compute_text_similarity("", "valid text") == 0.0

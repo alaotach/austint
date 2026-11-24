@@ -21,7 +21,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from osint_agent.tools import parse_maigret_json, parse_sherlock_output
+from osint_agent.collectors.tools import parse_maigret_json, parse_sherlock_output
 
 
 def run_smoke(username: str, fixture_dir: Path) -> None:

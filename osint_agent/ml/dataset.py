@@ -10,8 +10,8 @@ from typing import Any
 
 import numpy as np
 
-from osint_agent.features import FEATURE_NAMES, TargetContext, extract_features
-from osint_agent.schema import EntityType, Hit
+from osint_agent.ml.features import FEATURE_NAMES, TargetContext, extract_features
+from osint_agent.core.schema import EntityType, Hit
 
 
 @dataclass
@@ -61,7 +61,7 @@ def build_xy(
     pairs: list[LabeledPair],
 ) -> tuple[np.ndarray, np.ndarray, list[str]]:
     """Convert a sequence of labeled pairs into feature matrix X and label vector y."""
-    from osint_agent.embeddings import warm_embedding_cache
+    from osint_agent.ml.embeddings import warm_embedding_cache
 
     # Collect texts to pre-warm embedding cache in a vectorized pass
     all_texts: list[str] = []

@@ -12,8 +12,8 @@ from scipy.optimize import minimize
 from scipy.special import expit
 from sklearn.linear_model import LogisticRegression
 
-from osint_agent.features import FEATURE_NAMES, TargetContext, extract_features
-from osint_agent.schema import Entity, Hit
+from osint_agent.ml.features import FEATURE_NAMES, TargetContext, extract_features
+from osint_agent.core.schema import Entity, Hit
 
 logger = logging.getLogger(__name__)
 

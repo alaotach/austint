@@ -7,8 +7,8 @@ import asyncio
 import sys
 from pathlib import Path
 
-from osint_agent.agent import OSINTAgent, export_graph_to_json
-from osint_agent.schema import EntityType, Scope
+from osint_agent.core.agent import OSINTAgent, export_graph_to_json
+from osint_agent.core.schema import EntityType, Scope
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -69,7 +69,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--model-path",
         type=str,
-        default="model.joblib",
+        default="models/model.joblib",
         help="Path to trained resolver model checkpoint for --resolver learned",
     )
     parser.add_argument(
@@ -124,7 +124,7 @@ async def main_async(args: argparse.Namespace) -> int:
         accept_threshold=args.threshold,
     )
 
-    from osint_agent.resolver import BaselineWeightedResolver, LearnedResolver
+    from osint_agent.ml.resolver import BaselineWeightedResolver, LearnedResolver
 
     if args.resolver == "learned":
         model_p = Path(args.model_path)
@@ -137,10 +137,10 @@ async def main_async(args: argparse.Namespace) -> int:
         resolver = BaselineWeightedResolver()
 
     # Configure Planner
-    from osint_agent.planner import LLMPlanner, RuleBasedPlanner
+    from osint_agent.llm.planner import LLMPlanner, RuleBasedPlanner
 
     if args.planner == "llm":
-        from osint_agent.llm import get_llm_client
+        from osint_agent.llm.client import get_llm_client
         client = get_llm_client(provider=args.llm_provider, call_budget=args.max_llm_calls)
         planner = LLMPlanner(client=client, audit_path=args.audit_out)
     else:

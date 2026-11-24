@@ -13,13 +13,13 @@ from typing import Any
 import httpx
 import networkx as nx
 
-from osint_agent.audit import AuditLogger
-from osint_agent.enrich import fetch_profile_meta
-from osint_agent.extractor import extract_entities
-from osint_agent.planner import Planner, RuleBasedPlanner
-from osint_agent.resolver import BaseResolver, BaselineWeightedResolver
-from osint_agent.schema import Entity, EntityType, Scope
-from osint_agent.tools import TOOL_REGISTRY, set_audit_callback
+from osint_agent.core.audit import AuditLogger
+from osint_agent.collectors.enrich import fetch_profile_meta
+from osint_agent.collectors.extractor import extract_entities
+from osint_agent.llm.planner import Planner, RuleBasedPlanner
+from osint_agent.ml.resolver import BaseResolver, BaselineWeightedResolver
+from osint_agent.core.schema import Entity, EntityType, Scope
+from osint_agent.collectors.tools import TOOL_REGISTRY, set_audit_callback
 
 logger = logging.getLogger(__name__)
 

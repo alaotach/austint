@@ -8,15 +8,15 @@ from unittest.mock import patch
 from sklearn.metrics import f1_score
 from sklearn.model_selection import train_test_split
 
-from osint_agent.dataset import build_xy, generate_synthetic_pairs
-from osint_agent.features import FEATURE_NAMES, TargetContext
-from osint_agent.resolver import BaselineWeightedResolver, LearnedResolver
-from osint_agent.schema import Hit
+from osint_agent.ml.dataset import build_xy, generate_synthetic_pairs
+from osint_agent.ml.features import FEATURE_NAMES, TargetContext
+from osint_agent.ml.resolver import BaselineWeightedResolver, LearnedResolver
+from osint_agent.core.schema import Hit
 
 
 def test_learned_resolver_train_and_beats_baseline() -> None:
     """LearnedResolver should train on synthetic pairs and outperform baseline F1 on held-out split."""
-    with patch("osint_agent.embeddings.get_model", return_value=None):
+    with patch("osint_agent.ml.embeddings.get_model", return_value=None):
         pairs = generate_synthetic_pairs(n=300, seed=42)
         X, y, feature_names = build_xy(pairs)
 
@@ -54,7 +54,7 @@ def test_learned_resolver_train_and_beats_baseline() -> None:
 
 def test_learned_resolver_save_and_load_roundtrip(tmp_path: Path) -> None:
     """Saving and loading LearnedResolver with joblib must preserve exact predictions."""
-    with patch("osint_agent.embeddings.get_model", return_value=None):
+    with patch("osint_agent.ml.embeddings.get_model", return_value=None):
         pairs = generate_synthetic_pairs(n=50, seed=123)
         X, y, _ = build_xy(pairs)
 
@@ -80,7 +80,7 @@ def test_learned_resolver_save_and_load_roundtrip(tmp_path: Path) -> None:
 
 def test_learned_resolver_coefficients_are_non_negative() -> None:
     """Enforce monotonic behavior: every feature coefficient must be >= 0.0 (no negative effects)."""
-    with patch("osint_agent.embeddings.get_model", return_value=None):
+    with patch("osint_agent.ml.embeddings.get_model", return_value=None):
         pairs = generate_synthetic_pairs(n=100, seed=777)
         X, y, _ = build_xy(pairs)
 

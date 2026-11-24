@@ -7,14 +7,14 @@ import json
 import sys
 from pathlib import Path
 
-from osint_agent.dataset import LabeledPair
-from osint_agent.features import TargetContext
-from osint_agent.schema import EntityType, Hit
+from osint_agent.ml.dataset import LabeledPair
+from osint_agent.ml.features import TargetContext
+from osint_agent.core.schema import EntityType, Hit
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        prog="osint_agent.label_cli",
+        prog="osint_agent.ml.label_cli",
         description="Annotate candidate OSINT entity pairs for resolver model training",
     )
     parser.add_argument(

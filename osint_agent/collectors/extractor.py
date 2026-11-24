@@ -6,7 +6,7 @@ import logging
 import re
 from typing import Any
 
-from osint_agent.schema import (
+from osint_agent.core.schema import (
     SENSITIVE_ATTRIBUTE_PATTERNS,
     Entity,
     EntityType,

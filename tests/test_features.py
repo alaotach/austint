@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from osint_agent.features import FEATURE_NAMES, TargetContext, extract_features
-from osint_agent.schema import Entity, EntityType, Hit
+from osint_agent.ml.features import FEATURE_NAMES, TargetContext, extract_features
+from osint_agent.core.schema import Entity, EntityType, Hit
 
 
 def test_feature_names_order() -> None:

@@ -16,13 +16,13 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from osint_agent.agent import OSINTAgent
-from osint_agent.llm import get_llm_client
-from osint_agent.planner import LLMPlanner, RuleBasedPlanner
-from osint_agent.resolver import BaselineWeightedResolver, LearnedResolver
-from osint_agent.schema import EntityType, Scope
-from osint_agent.seeds import parse_seeds
-from osint_agent.tools import TOOL_REGISTRY
+from osint_agent.core.agent import OSINTAgent
+from osint_agent.llm.client import get_llm_client
+from osint_agent.llm.planner import LLMPlanner, RuleBasedPlanner
+from osint_agent.ml.resolver import BaselineWeightedResolver, LearnedResolver
+from osint_agent.core.schema import EntityType, Scope
+from osint_agent.llm.seeds import parse_seeds
+from osint_agent.collectors.tools import TOOL_REGISTRY
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +40,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
+STATIC_DIR = Path(__file__).resolve().parent.parent.parent / "static"
 if STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
@@ -106,7 +106,7 @@ class InvestigateRequest(BaseModel):
     confidence_decay: float = Field(0.8, gt=0.0, le=1.0, description="Multiplier decaying confidence per hop")
     accept_threshold: float = Field(0.5, ge=0.0, le=1.0, description="Admission threshold for fuzzy hits")
     resolver: str = Field("learned", description="Entity resolver: 'baseline' or 'learned'")
-    model_path: str = Field("model.joblib", description="Path to trained ML model checkpoint")
+    model_path: str = Field("models/model.joblib", description="Path to trained ML model checkpoint")
     planner: str = Field("rule", description="Tool execution planner: 'rule' or 'llm'")
     llm_provider: str = Field("anthropic", description="LLM provider for LLMPlanner: anthropic, gemini, or fake")
     max_llm_calls: int = Field(20, ge=1, le=100, description="Budget for LLM operations")

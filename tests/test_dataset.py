@@ -7,15 +7,15 @@ from unittest.mock import patch
 
 import numpy as np
 
-from osint_agent.dataset import (
+from osint_agent.ml.dataset import (
     LabeledPair,
     build_xy,
     generate_synthetic_pairs,
     load_pairs,
     save_pairs,
 )
-from osint_agent.features import FEATURE_NAMES, TargetContext
-from osint_agent.schema import EntityType, Hit
+from osint_agent.ml.features import FEATURE_NAMES, TargetContext
+from osint_agent.core.schema import EntityType, Hit
 
 
 def test_labeled_pair_jsonl_roundtrip(tmp_path: Path) -> None:
@@ -59,7 +59,7 @@ def test_labeled_pair_jsonl_roundtrip(tmp_path: Path) -> None:
 
 def test_build_xy_feature_names_order() -> None:
     """build_xy output matrix X columns must match FEATURE_NAMES ordering."""
-    with patch("osint_agent.embeddings.get_model", return_value=None):
+    with patch("osint_agent.ml.embeddings.get_model", return_value=None):
         pairs = generate_synthetic_pairs(n=10, seed=42)
         X, y, feature_names = build_xy(pairs)
 
@@ -90,7 +90,7 @@ def test_synthetic_generation_balance_and_notes() -> None:
 def test_label_cli_graph_loading(tmp_path: Path) -> None:
     """label_cli should load candidate pairs from graph.json without errors."""
     import json
-    from osint_agent.label_cli import load_candidate_pairs_from_graph
+    from osint_agent.ml.label_cli import load_candidate_pairs_from_graph
 
     graph_file = tmp_path / "test_graph.json"
     dummy_graph = {

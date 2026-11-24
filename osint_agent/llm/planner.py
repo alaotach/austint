@@ -7,10 +7,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Protocol, runtime_checkable
 
-from osint_agent.audit import write_audit_event as _log_planner_audit
-from osint_agent.llm import LLMClient
-from osint_agent.schema import Entity
-from osint_agent.tools import TOOL_REGISTRY, get_tools_for_type
+from osint_agent.core.audit import write_audit_event as _log_planner_audit
+from osint_agent.llm.client import LLMClient
+from osint_agent.core.schema import Entity
+from osint_agent.collectors.tools import TOOL_REGISTRY, get_tools_for_type
 
 logger = logging.getLogger(__name__)
 

@@ -15,7 +15,7 @@ from typing import Any, Awaitable, Callable
 
 import httpx
 
-from osint_agent.schema import Entity, EntityType, Hit
+from osint_agent.core.schema import Entity, EntityType, Hit
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +38,7 @@ def set_audit_callback(callback: Callable[[str, dict[str, Any]], None] | None) -
 
 def log_audit_event(event_type: str, details: dict[str, Any]) -> None:
     """Log an audit event via registered callback or fallback JSONL."""
-    from osint_agent.audit import write_audit_event
+    from osint_agent.core.audit import write_audit_event
 
     if _audit_callback is not None:
         try:
@@ -302,7 +302,7 @@ async def collect_domain_intel(entity: Entity, client: httpx.AsyncClient) -> lis
     # 3. Live HTTP inspection for hosting/CDN headers and homepage metadata
     web_url = f"https://{domain}"
     try:
-        from osint_agent.enrich import parse_html_metadata
+        from osint_agent.collectors.enrich import parse_html_metadata
 
         web_resp = await client.get(
             web_url,
@@ -709,7 +709,7 @@ async def collect_maigret(entity: Entity, client: httpx.AsyncClient) -> list[Hit
 
     # Fast native streaming checker using Maigret's local site rules
     try:
-        from osint_agent.stream_checker import load_maigret_sites, stream_username_check
+        from osint_agent.collectors.stream_checker import load_maigret_sites, stream_username_check
 
         if load_maigret_sites():
             def _on_live_hit(hit: Hit) -> None:

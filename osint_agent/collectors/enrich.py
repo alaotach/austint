@@ -12,8 +12,8 @@ import urllib.robotparser
 
 import httpx
 
-from osint_agent.schema import Hit
-from osint_agent.tools import DEFAULT_USER_AGENT
+from osint_agent.core.schema import Hit
+from osint_agent.collectors.tools import DEFAULT_USER_AGENT
 
 logger = logging.getLogger(__name__)
 

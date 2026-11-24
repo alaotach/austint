@@ -10,16 +10,16 @@ import httpx
 import pytest
 import respx
 
-from osint_agent.agent import OSINTAgent
-from osint_agent.enrich import (
+from osint_agent.core.agent import OSINTAgent
+from osint_agent.collectors.enrich import (
     MAX_RESPONSE_BYTES,
     fetch_profile_meta,
     is_private_or_loopback_host,
     parse_html_metadata,
 )
-from osint_agent.extractor import extract_entities, is_sensitive
-from osint_agent.schema import Entity, EntityType, Hit, Scope
-from osint_agent.tools import (
+from osint_agent.collectors.extractor import extract_entities, is_sensitive
+from osint_agent.core.schema import Entity, EntityType, Hit, Scope
+from osint_agent.collectors.tools import (
     collect_maigret,
     collect_sherlock,
     parse_maigret_json,
@@ -335,7 +335,7 @@ def test_real_fixtures_parsing() -> None:
 @respx.mock
 async def test_stream_username_check_offline() -> None:
     """Native streaming checker should yield hits immediately via on_hit callback."""
-    from osint_agent.stream_checker import stream_username_check
+    from osint_agent.collectors.stream_checker import stream_username_check
 
     mock_sites = [
         (
@@ -368,7 +368,7 @@ async def test_stream_username_check_offline() -> None:
     )
 
     streamed: list[Hit] = []
-    with patch("osint_agent.stream_checker.load_maigret_sites", return_value=mock_sites):
+    with patch("osint_agent.collectors.stream_checker.load_maigret_sites", return_value=mock_sites):
         hits = await stream_username_check(
             username="streamuser",
             target_id="username:streamuser",
