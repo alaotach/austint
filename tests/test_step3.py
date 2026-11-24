@@ -329,3 +329,58 @@ def test_real_fixtures_parsing() -> None:
     assert gh_hit.metadata.get("name") == "Linus Torvalds"
     assert gh_hit.metadata.get("location") == "Portland, OR"
     assert "Linux Foundation" in gh_hit.metadata.get("bio", "")
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_stream_username_check_offline() -> None:
+    """Native streaming checker should yield hits immediately via on_hit callback."""
+    from osint_agent.stream_checker import stream_username_check
+
+    mock_sites = [
+        (
+            10,
+            "GitHub",
+            {
+                "url": "https://github.com/{username}",
+                "urlProbe": "https://api.github.com/users/{username}",
+                "checkType": "status_code",
+            },
+        ),
+        (
+            20,
+            "MissingSite",
+            {
+                "url": "https://missing.example.com/{username}",
+                "checkType": "status_code",
+            },
+        ),
+    ]
+
+    respx.get("https://api.github.com/users/streamuser").mock(
+        return_value=httpx.Response(
+            200,
+            json={"name": "Stream User", "bio": "Async OSINT engineer", "location": "Austin, TX"},
+        )
+    )
+    respx.get("https://missing.example.com/streamuser").mock(
+        return_value=httpx.Response(404)
+    )
+
+    streamed: list[Hit] = []
+    with patch("osint_agent.stream_checker.load_maigret_sites", return_value=mock_sites):
+        hits = await stream_username_check(
+            username="streamuser",
+            target_id="username:streamuser",
+            max_sites=10,
+            concurrency=5,
+            overall_timeout=5.0,
+            on_hit=lambda h: streamed.append(h),
+        )
+
+    assert len(hits) == 1
+    assert len(streamed) == 1
+    assert hits[0].discovered_value == "https://github.com/streamuser"
+    assert hits[0].metadata["name"] == "Stream User"
+    assert hits[0].metadata["location"] == "Austin, TX"
+    assert "Async OSINT engineer" in hits[0].metadata["bio"]

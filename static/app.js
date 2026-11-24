@@ -584,12 +584,107 @@ function connectEventStream(jobId) {
   };
 }
 
+let liveNodeCount = 0;
+let liveEdgeCount = 0;
+let liveSeedId = null;
+
+function addLiveNodeAndEdge(nodeId, label, etype, depth, parentId, relation, sourceTool) {
+  if (!graph || graph.get('destroyed')) return;
+  if (graph.findById(nodeId)) return;
+
+  const palette = TYPE_COLORS[etype] || TYPE_COLORS.default;
+  const isSeed = depth === 0;
+
+  // Position radially around center if non-seed so live nodes don't pile on (0,0)
+  const container = document.getElementById('cy');
+  const cx = (container.scrollWidth || 800) / 2;
+  const cy = (container.scrollHeight || 600) / 2;
+
+  let x = cx;
+  let y = cy;
+  if (!isSeed) {
+    const angle = (liveNodeCount * 0.61803398875) * Math.PI * 2;
+    const radius = 160 + (liveNodeCount % 3) * 70;
+    x = cx + Math.cos(angle) * radius;
+    y = cy + Math.sin(angle) * radius;
+  } else {
+    liveSeedId = nodeId;
+  }
+
+  graph.addItem('node', {
+    id: nodeId,
+    x,
+    y,
+    label: wrapLabel(label),
+    labelFull: label,
+    entityType: etype,
+    confidence: 1.0,
+    depth,
+    provenance: [sourceTool || 'stream'],
+    type: isSeed ? 'seed-pulse-node' : 'circle',
+    size: isSeed ? 42 : 28,
+    style: {
+      fill: palette.fill,
+      stroke: isSeed ? '#ffffff' : palette.stroke,
+      lineWidth: isSeed ? 3 : 2,
+      shadowColor: palette.glow,
+      shadowBlur: isSeed ? 22 : 12,
+    },
+    labelCfg: {
+      position: 'bottom',
+      offset: isSeed ? 12 : 8,
+      style: {
+        fontWeight: isSeed ? 700 : 500,
+        fontSize: isSeed ? 12 : 11,
+        background: {
+          fill: '#0b1120',
+          stroke: isSeed ? palette.stroke : '#24344d',
+          padding: [3, 7, 3, 7],
+          radius: 4,
+        },
+      },
+    },
+  });
+
+  liveNodeCount++;
+  document.getElementById('header-node-count').textContent = liveNodeCount;
+
+  if (parentId && graph.findById(parentId)) {
+    const edgeId = `live_edge_${liveEdgeCount++}`;
+    graph.addItem('edge', {
+      id: edgeId,
+      source: parentId,
+      target: nodeId,
+      label: relation || 'account_on',
+      relation: relation || 'account_on',
+      score: 1.0,
+      sourceTool: sourceTool || 'maigret',
+    });
+    document.getElementById('header-edge-count').textContent = liveEdgeCount;
+  }
+
+  if (liveNodeCount === 1 || liveNodeCount % 8 === 0) {
+    graph.fitView(60);
+  }
+}
+
 function handleLiveEvent(evt) {
   const name = evt.event;
   const data = evt.data || {};
 
-  if (name === 'tool_call_started') {
+  if (name === 'investigation_started') {
+    liveNodeCount = 0;
+    liveEdgeCount = 0;
+    graph.clear();
+    const seedId = `${data.target_kind}:${data.target_value}`;
+    addLiveNodeAndEdge(seedId, data.target_value, data.target_kind, 0, null, null, 'seed');
+  } else if (name === 'tool_call_started') {
     appendLog('TOOL', `Dispatched ${data.tool} on ${data.entity_id}`, 'badge-info');
+  } else if (name === 'profile_discovered') {
+    appendLog('FOUND', `[${data.site}] ${data.url}`, 'badge-success');
+    const nodeId = `profile:${data.url}`;
+    const parentId = `username:${data.username}`;
+    addLiveNodeAndEdge(nodeId, data.site || data.url, 'profile', 1, parentId, 'account_on', 'maigret');
   } else if (name === 'resolver_decision') {
     if (data.accepted) {
       appendLog('ACCEPT', `Admitted ${data.hit_value} (confidence: ${data.score})`, 'badge-success');

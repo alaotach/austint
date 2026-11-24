@@ -706,6 +706,33 @@ async def collect_maigret(entity: Entity, client: httpx.AsyncClient) -> list[Hit
         return []
 
     username = entity.value.strip().lstrip("@")
+
+    # Fast native streaming checker using Maigret's local site rules
+    try:
+        from osint_agent.stream_checker import load_maigret_sites, stream_username_check
+
+        if load_maigret_sites():
+            def _on_live_hit(hit: Hit) -> None:
+                log_audit_event(
+                    "profile_discovered",
+                    {
+                        "site": hit.metadata.get("site", "unknown"),
+                        "url": hit.discovered_value,
+                        "username": username,
+                    },
+                )
+
+            return await stream_username_check(
+                username=username,
+                target_id=entity.id,
+                max_sites=11000,
+                concurrency=200,
+                overall_timeout=90.0,
+                on_hit=_on_live_hit,
+            )
+    except Exception as exc:
+        logger.warning("Native streaming checker failed (%s); falling back to Maigret CLI.", exc)
+
     with tempfile.TemporaryDirectory() as tmpdir:
         try:
             proc = await asyncio.create_subprocess_exec(
