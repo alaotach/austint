@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Intelligent OSINT: Autonomous Reconnaissance Graph</title>
+  <link rel="stylesheet" href="/static/style.css?v=4">
+  <script src="/static/vendor/g6.min.js"></script>
+</head>
+<body>
+
+  <!-- Top Navigation Header -->
+  <header>
+    <div class="brand">
+      <span class="brand-title">Intelligent OSINT</span>
+      <span class="brand-badge">Agentic ML Engine</span>
+    </div>
+
+    <div class="header-status">
+      <div class="status-pill">
+        <span class="status-dot idle" id="system-status-dot"></span>
+        <span id="system-status-text">System Idle</span>
+      </div>
+      <div class="status-pill">
+        <span>Job: <strong id="header-job-id">--</strong></span>
+      </div>
+      <div class="status-pill">
+        <span>Nodes: <strong id="header-node-count">0</strong></span>
+      </div>
+      <div class="status-pill">
+        <span>Edges: <strong id="header-edge-count">0</strong></span>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Container -->
+  <div class="app-container">
+
+    <!-- Left Controls Sidebar -->
+    <aside class="sidebar">
+
+      <!-- Investigation Target Section -->
+      <div class="sidebar-section">
+        <div class="section-title">Investigation Target</div>
+
+        <!-- Mode Selection Tabs -->
+        <div class="tab-group">
+          <button class="tab-btn active" id="tab-structured" onclick="setTab('structured')">Structured Target</button>
+          <button class="tab-btn" id="tab-freetext" onclick="setTab('freetext')">Free-Text Extraction</button>
+        </div>
+
+        <!-- Structured Input Form -->
+        <div id="form-structured">
+          <div class="form-group">
+            <label for="target-kind">Target Entity Kind</label>
+            <select id="target-kind">
+              <option value="domain">Domain</option>
+              <option value="username">Username</option>
+              <option value="org">Organization</option>
+              <option value="place">Place / Location</option>
+              <option value="public_figure">Public Figure</option>
+              <option value="consenting_person">Consenting Person</option>
+            </select>
+          </div>
+
+          <div class="form-group">
+            <label for="target-value">Seed Value</label>
+            <input type="text" id="target-value" placeholder="e.g. example.com or octocat" value="example.com">
+          </div>
+        </div>
+
+        <!-- Free-Text Input Form -->
+        <div id="form-freetext" style="display: none;">
+          <div class="form-group">
+            <label for="target-freetext">Natural Language Description</label>
+            <textarea id="target-freetext" placeholder="Paste target dossier or bio text to extract seed entities automatically via LLM..."></textarea>
+          </div>
+        </div>
+
+        <!-- Consent Gate (HARD RULE) -->
+        <div class="consent-box">
+          <label class="consent-label">
+            <input type="checkbox" id="consent-checkbox">
+            <span><strong>Authorization Gate:</strong> I confirm Scope authorization to run public reconnaissance across allowed sources.</span>
+          </label>
+        </div>
+
+        <!-- Advanced Parameters Accordion -->
+        <button class="params-toggle" id="params-toggle" onclick="toggleParams()">
+          <span id="params-toggle-text">Configure Parameters</span>
+          <span id="params-toggle-arrow">▼</span>
+        </button>
+
+        <div class="params-content" id="params-content">
+          <div class="grid-2col">
+            <div class="form-group">
+              <label for="param-depth">Max Depth</label>
+              <input type="text" id="param-depth" value="2">
+            </div>
+            <div class="form-group">
+              <label for="param-calls">Max Tool Calls</label>
+              <input type="text" id="param-calls" value="15">
+            </div>
+          </div>
+
+          <div class="grid-2col">
+            <div class="form-group">
+              <label for="param-decay">Confidence Decay</label>
+              <input type="text" id="param-decay" value="0.8">
+            </div>
+            <div class="form-group">
+              <label for="param-threshold">Score Threshold</label>
+              <input type="text" id="param-threshold" value="0.5">
+            </div>
+          </div>
+
+          <div class="grid-2col">
+            <div class="form-group">
+              <label for="param-resolver">ML Resolver</label>
+              <select id="param-resolver">
+                <option value="learned">Learned (ML)</option>
+                <option value="baseline">Baseline (Heuristic)</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label for="param-planner">Planner</label>
+              <select id="param-planner">
+                <option value="rule">Rule-Based</option>
+                <option value="llm">Adaptive LLM</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label for="param-llm-provider">LLM Provider</label>
+            <select id="param-llm-provider">
+              <option value="anthropic">Anthropic Claude</option>
+              <option value="gemini">Google Gemini</option>
+              <option value="fake">Offline Mock (Deterministic)</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- Dispatch Button -->
+        <button class="btn-primary" id="btn-dispatch" onclick="submitInvestigation()">
+          <span id="btn-dispatch-text">Start Investigation</span>
+        </button>
+      </div>
+
+      <!-- Entity / Edge Inspector Section -->
+      <div class="sidebar-section" style="flex: 1;">
+        <div class="section-title">Inspector & Provenance</div>
+        <div class="inspector-card" id="inspector-content">
+          <p style="color: var(--text-dim); font-size: 12px; font-style: italic;">
+            Click any node or edge in the knowledge graph to view detailed confidence scores, attributes, and origin tools.
+          </p>
+        </div>
+      </div>
+
+    </aside>
+
+    <!-- Main Workspace (Graph Canvas + Toolbar + Event Drawer) -->
+    <main class="graph-workspace">
+
+      <!-- Top Graph Toolbar -->
+      <div class="graph-toolbar">
+        <div class="toolbar-left">
+          <button class="tool-btn" onclick="runGraphLayout('radial')">Radial</button>
+          <button class="tool-btn" onclick="runGraphLayout('force')">Force Physics</button>
+          <button class="tool-btn" onclick="runGraphLayout('dagre')">Hierarchy</button>
+          <button class="tool-btn" onclick="fitGraph()">Fit View</button>
+        </div>
+
+        <div class="toolbar-right">
+          <button class="tool-btn" onclick="exportGraphJson()">Export JSON</button>
+          <button class="tool-btn" onclick="clearGraph()">Reset</button>
+        </div>
+      </div>
+
+      <!-- AntV G6 Graph Canvas -->
+      <div id="cy"></div>
+
+      <!-- Legend Overlay -->
+      <div class="graph-legend">
+        <div class="legend-item"><span class="legend-color" style="background: var(--node-domain);"></span> Domain</div>
+        <div class="legend-item"><span class="legend-color" style="background: var(--node-username);"></span> Username</div>
+        <div class="legend-item"><span class="legend-color" style="background: var(--node-profile);"></span> Profile</div>
+        <div class="legend-item"><span class="legend-color" style="background: var(--node-email);"></span> Email</div>
+        <div class="legend-item"><span class="legend-color" style="background: var(--node-org);"></span> Organization</div>
+        <div class="legend-item"><span class="legend-color" style="background: var(--node-place);"></span> Location</div>
+      </div>
+
+      <!-- Live Event Activity Drawer -->
+      <div class="stream-drawer">
+        <div class="stream-header">
+          <span>Live Investigation Event Stream (SSE)</span>
+          <span id="stream-count" style="font-family: var(--font-mono); font-size: 11px;">0 Events</span>
+        </div>
+        <div class="stream-logs" id="stream-logs">
+          <div class="log-entry">
+            <span class="log-time">00:00:00</span>
+            <span class="log-badge badge-info">INIT</span>
+            <span class="log-msg">System initialized. Awaiting target submission...</span>
+          </div>
+        </div>
+      </div>
+
+    </main>
+
+  </div>
+
+  <script src="/static/app.js?v=4"></script>
+</body>
+</html>

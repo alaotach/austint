@@ -1,0 +1,116 @@
+{
+  "directed": true,
+  "multigraph": false,
+  "graph_metadata": {
+    "node_count": 6,
+    "edge_count": 5,
+    "exported_at": "2026-11-24T19:21:14.997007+00:00"
+  },
+  "nodes": [
+    {
+      "id": "username:torvalds",
+      "entity_type": "username",
+      "value": "torvalds",
+      "confidence": 1.0,
+      "depth": 0,
+      "provenance": [
+        "seed:target"
+      ]
+    },
+    {
+      "id": "profile:https://github.com/torvalds",
+      "entity_type": "profile",
+      "value": "https://github.com/torvalds",
+      "confidence": 0.4279,
+      "depth": 1,
+      "provenance": [
+        "seed:target",
+        "sherlock:account_on"
+      ]
+    },
+    {
+      "id": "email:torvalds@linux-foundation.org",
+      "entity_type": "email",
+      "value": "torvalds@linux-foundation.org",
+      "confidence": 0.3423,
+      "depth": 2,
+      "provenance": [
+        "seed:target",
+        "sherlock:account_on",
+        "extracted:email"
+      ]
+    },
+    {
+      "id": "domain:linux-foundation.org",
+      "entity_type": "domain",
+      "value": "linux-foundation.org",
+      "confidence": 0.3423,
+      "depth": 2,
+      "provenance": [
+        "seed:target",
+        "sherlock:account_on",
+        "extracted:domain"
+      ]
+    },
+    {
+      "id": "domain:kernel.org",
+      "entity_type": "domain",
+      "value": "kernel.org",
+      "confidence": 0.3423,
+      "depth": 2,
+      "provenance": [
+        "seed:target",
+        "sherlock:account_on",
+        "extracted:domain"
+      ]
+    },
+    {
+      "id": "profile:https://www.reddit.com/user/torvalds",
+      "entity_type": "profile",
+      "value": "https://www.reddit.com/user/torvalds",
+      "confidence": 0.4438,
+      "depth": 1,
+      "provenance": [
+        "seed:target",
+        "sherlock:account_on"
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "source": "username:torvalds",
+      "target": "profile:https://github.com/torvalds",
+      "relation": "account_on",
+      "source_tool": "sherlock",
+      "score": 0.5349
+    },
+    {
+      "source": "username:torvalds",
+      "target": "profile:https://www.reddit.com/user/torvalds",
+      "relation": "account_on",
+      "source_tool": "sherlock",
+      "score": 0.5548
+    },
+    {
+      "source": "profile:https://github.com/torvalds",
+      "target": "email:torvalds@linux-foundation.org",
+      "relation": "mentioned_in",
+      "source_tool": "extractor",
+      "score": 1.0
+    },
+    {
+      "source": "profile:https://github.com/torvalds",
+      "target": "domain:linux-foundation.org",
+      "relation": "mentioned_in",
+      "source_tool": "extractor",
+      "score": 1.0
+    },
+    {
+      "source": "profile:https://github.com/torvalds",
+      "target": "domain:kernel.org",
+      "relation": "mentioned_in",
+      "source_tool": "extractor",
+      "score": 1.0
+    }
+  ]
+}
