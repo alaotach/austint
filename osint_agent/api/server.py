@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, AsyncGenerator
 
-from fastapi import BackgroundTasks, FastAPI, HTTPException, status
+from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -323,6 +323,89 @@ async def parse_seeds_endpoint(req: ParseSeedsRequest) -> dict[str, Any]:
             }
             for e in entities
         ],
+    }
+
+
+@app.post("/api/analyze-image", tags=["Image & Geo"])
+async def analyze_image_endpoint(
+    file: UploadFile = File(...),
+    consent_confirmed: bool = Form(False),
+) -> dict[str, Any]:
+    """Extract EXIF/GPS metadata from an uploaded image and reverse-geocode via Nominatim + Overpass."""
+    if not consent_confirmed:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Consent confirmation required: Scope.consent_confirmed must be True.",
+        )
+
+    import httpx
+    import networkx as nx
+    from osint_agent.collectors.image_intel import (
+        extract_image_metadata,
+        reverse_geocode_and_overpass,
+    )
+
+    image_bytes = await file.read()
+    if len(image_bytes) > 10_000_000:
+        raise HTTPException(status_code=413, detail="Image exceeds 10 MB limit.")
+
+    meta = extract_image_metadata(image_bytes)
+    job_id = uuid.uuid4().hex[:12]
+    job = JobState(job_id=job_id, request_data={"filename": file.filename, "kind": "image"})
+    job.status = "running"
+    job.started_at = datetime.now(timezone.utc).isoformat()
+    JOBS[job_id] = job
+
+    graph = nx.DiGraph()
+    seed_id = f"profile:image:{file.filename or job_id}"
+    graph.add_node(
+        seed_id,
+        entity_type="profile",
+        value=file.filename or "uploaded_image",
+        confidence=1.0,
+        depth=0,
+        provenance=["image_upload"],
+        attributes={k: v for k, v in meta.items() if v is not None},
+    )
+
+    if meta.get("camera_make") or meta.get("camera_model"):
+        cam = f"{meta.get('camera_make') or ''} {meta.get('camera_model') or ''}".strip()
+        cam_id = f"org:device:{cam}"
+        graph.add_node(cam_id, entity_type="org", value=cam, confidence=1.0, depth=1, provenance=["exif"])
+        graph.add_edge(seed_id, cam_id, relation="captured_on", score=1.0, source_tool="image_intel")
+
+    if meta.get("artist"):
+        art_id = f"username:{meta['artist']}"
+        graph.add_node(art_id, entity_type="username", value=meta["artist"], confidence=0.9, depth=1, provenance=["exif"])
+        graph.add_edge(seed_id, art_id, relation="exif_artist", score=0.9, source_tool="image_intel")
+
+    gps = meta.get("gps")
+    if gps:
+        async with httpx.AsyncClient() as client:
+            geo_hits = await reverse_geocode_and_overpass(gps["lat"], gps["lon"], seed_id, client)
+        for h in geo_hits:
+            gid = f"place:{h.discovered_value}"
+            if gid not in graph:
+                graph.add_node(
+                    gid,
+                    entity_type=h.discovered_type.value,
+                    value=h.discovered_value,
+                    confidence=1.0,
+                    depth=1,
+                    provenance=["image_intel:gps"],
+                    attributes=h.raw_data,
+                )
+            graph.add_edge(seed_id, gid, relation=h.relation, score=1.0, source_tool="image_intel")
+
+    job.graph_data = format_graph_cytoscape(graph)
+    job.status = "completed"
+    job.completed_at = datetime.now(timezone.utc).isoformat()
+    job.append_event("job_completed", {"nodes_count": graph.number_of_nodes(), "edges_count": graph.number_of_edges()})
+
+    return {
+        "job_id": job_id,
+        "metadata": meta,
+        "stats": job.graph_data["stats"],
     }
 
 

@@ -28,22 +28,13 @@ async function checkApiHealth() {
 
 function setTab(tab) {
   currentTab = tab;
-  const tabStructured = document.getElementById('tab-structured');
-  const tabFreetext = document.getElementById('tab-freetext');
-  const formStructured = document.getElementById('form-structured');
-  const formFreetext = document.getElementById('form-freetext');
+  document.getElementById('tab-structured').classList.toggle('active', tab === 'structured');
+  document.getElementById('tab-freetext').classList.toggle('active', tab === 'freetext');
+  document.getElementById('tab-image').classList.toggle('active', tab === 'image');
 
-  if (tab === 'structured') {
-    tabStructured.classList.add('active');
-    tabFreetext.classList.remove('active');
-    formStructured.style.display = 'block';
-    formFreetext.style.display = 'none';
-  } else {
-    tabFreetext.classList.add('active');
-    tabStructured.classList.remove('active');
-    formStructured.style.display = 'none';
-    formFreetext.style.display = 'block';
-  }
+  document.getElementById('form-structured').style.display = tab === 'structured' ? 'block' : 'none';
+  document.getElementById('form-freetext').style.display = tab === 'freetext' ? 'block' : 'none';
+  document.getElementById('form-image').style.display = tab === 'image' ? 'block' : 'none';
 }
 
 function toggleParams() {
@@ -72,6 +63,39 @@ async function submitInvestigation() {
 
   document.getElementById('system-status-dot').className = 'status-dot running';
   document.getElementById('system-status-text').textContent = 'Agent Executing';
+
+  if (currentTab === 'image') {
+    const fileInput = document.getElementById('target-image-file');
+    if (!fileInput.files || !fileInput.files[0]) {
+      alert('Please select an image file first.');
+      btn.disabled = false;
+      btnText.textContent = 'Start Investigation';
+      return;
+    }
+    try {
+      const formData = new FormData();
+      formData.append('file', fileInput.files[0]);
+      formData.append('consent_confirmed', 'true');
+      const res = await fetch('/api/analyze-image', { method: 'POST', body: formData });
+      if (!res.ok) {
+        const errData = await res.json();
+        throw new Error(errData.detail || 'Image analysis failed');
+      }
+      const data = await res.json();
+      currentJobId = data.job_id;
+      document.getElementById('header-job-id').textContent = currentJobId;
+      appendLog('IMAGE', `Extracted EXIF & Geo for ${fileInput.files[0].name} (${data.stats.nodes_count} nodes)`, 'badge-success');
+      await loadGraphData(currentJobId);
+    } catch (err) {
+      alert(`Error: ${err.message}`);
+    } finally {
+      btn.disabled = false;
+      btnText.textContent = 'Start Investigation';
+      document.getElementById('system-status-dot').className = 'status-dot';
+      document.getElementById('system-status-text').textContent = 'Ready';
+    }
+    return;
+  }
 
   const payload = {
     consent_confirmed: true,

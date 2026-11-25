@@ -159,3 +159,38 @@ def test_api_stream_events() -> None:
                 break
 
     assert any("test_event_1" in line for line in lines)
+
+
+def test_api_analyze_image_and_similarity() -> None:
+    """POST /api/analyze-image must enforce consent and extract image metadata + perceptual hash."""
+    import io
+    from PIL import Image
+    from osint_agent.collectors.image_intel import compare_image_bytes
+
+    buf = io.BytesIO()
+    Image.new("RGB", (64, 64), color=(30, 144, 255)).save(buf, format="JPEG")
+    img_bytes = buf.getvalue()
+
+    # 1. Consent refusal
+    resp_refused = client.post(
+        "/api/analyze-image",
+        files={"file": ("test.jpg", img_bytes, "image/jpeg")},
+        data={"consent_confirmed": "false"},
+    )
+    assert resp_refused.status_code == 403
+
+    # 2. Valid analysis
+    resp_ok = client.post(
+        "/api/analyze-image",
+        files={"file": ("test.jpg", img_bytes, "image/jpeg")},
+        data={"consent_confirmed": "true"},
+    )
+    assert resp_ok.status_code == 200
+    data = resp_ok.json()
+    assert data["metadata"]["width"] == 64
+    assert data["metadata"]["height"] == 64
+    assert data["metadata"]["format"] == "JPEG"
+    assert data["stats"]["nodes_count"] >= 1
+
+    # 3. Perceptual similarity identical image == 1.0
+    assert compare_image_bytes(img_bytes, img_bytes) == 1.0

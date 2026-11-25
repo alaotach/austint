@@ -83,6 +83,8 @@ async def _analyze_github(username: str, client: httpx.AsyncClient) -> dict[str,
                 info["followers"] = d["followers"]
             if d.get("public_repos") is not None:
                 info["public_repos"] = d["public_repos"]
+            if d.get("avatar_url"):
+                info["avatar_url"] = d["avatar_url"]
 
         rs = await client.get(f"https://api.github.com/users/{username}/social_accounts", timeout=4.0)
         if rs.status_code == 200 and isinstance(rs.json(), list):
@@ -137,6 +139,8 @@ async def _analyze_bluesky(handle: str, client: httpx.AsyncClient) -> dict[str, 
                 info["followers"] = d["followersCount"]
             if d.get("postsCount") is not None:
                 info["posts"] = d["postsCount"]
+            if d.get("avatar"):
+                info["avatar_url"] = d["avatar"]
     except Exception:
         pass
     return info
@@ -376,6 +380,8 @@ async def analyze_profile_hit(hit: Hit, client: httpx.AsyncClient) -> dict[str, 
     if info.get("linked_urls"):
         hit.metadata["linked_urls"] = info["linked_urls"]
         text_parts.append("Links: " + " ".join(info["linked_urls"]))
+    if info.get("avatar_url"):
+        hit.metadata["avatar_url"] = info["avatar_url"]
 
     combined_desc = " | ".join(p for p in text_parts if p)
     if combined_desc:
