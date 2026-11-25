@@ -211,6 +211,8 @@ async def collect_crtsh(entity: Entity, client: httpx.AsyncClient) -> list[Hit]:
     return hits
 
 
+
+
 @register_tool(
     name="domain_intel",
     target_types=[EntityType.DOMAIN],
@@ -480,6 +482,8 @@ async def collect_domain_intel(entity: Entity, client: httpx.AsyncClient) -> lis
     return hits
 
 
+
+
 @register_tool(
     name="nominatim",
     target_types=[EntityType.PLACE],
@@ -572,6 +576,8 @@ async def collect_nominatim(entity: Entity, client: httpx.AsyncClient) -> list[H
 
 
 
+
+
 @register_tool(
     name="wikidata",
     target_types=[
@@ -648,6 +654,8 @@ async def collect_wikidata(entity: Entity, client: httpx.AsyncClient) -> list[Hi
 
 
 
+
+
 def parse_sherlock_output(stdout: str, username: str, target_id: str) -> list[Hit]:
     """Parse standard stdout lines from sherlock execution into normalized Hits."""
     hits: list[Hit] = []
@@ -668,6 +676,8 @@ def parse_sherlock_output(stdout: str, username: str, target_id: str) -> list[Hi
             )
         )
     return hits
+
+
 
 
 
@@ -745,6 +755,8 @@ def parse_maigret_json(data: Any, username: str, target_id: str) -> list[Hit]:
             )
         )
     return hits
+
+
 
 
 
@@ -926,6 +938,8 @@ def parse_holehe_output(stdout: str, email: str, target_id: str) -> list[Hit]:
     return hits
 
 
+
+
 @register_tool(
     name="email_intel",
     target_types=[EntityType.EMAIL],
@@ -1022,6 +1036,8 @@ async def collect_email_intel(entity: Entity, client: httpx.AsyncClient) -> list
         log_audit_event("tool_unavailable", {"tool": "holehe", "reason": "binary not found on PATH"})
         return hits
 
+
+
     with tempfile.TemporaryDirectory() as tmpdir:
         try:
             proc = await asyncio.create_subprocess_exec(
@@ -1055,6 +1071,8 @@ async def collect_email_intel(entity: Entity, client: httpx.AsyncClient) -> list
             logger.warning("Holehe execution error for %s: %s", email, exc)
 
     return hits
+
+
 
 
 @register_tool(
@@ -1191,5 +1209,147 @@ async def collect_web_archive_crawl(entity: Entity, client: httpx.AsyncClient) -
                 },
             )
         )
+
+    return hits
+
+
+@register_tool(
+    name="github_code_intel",
+    target_types=[EntityType.USERNAME, EntityType.ORG],
+    description="Discovers public GitHub repositories, languages, org memberships, project homepages, and commit emails.",
+)
+async def collect_github_code_intel(entity: Entity, client: httpx.AsyncClient) -> list[Hit]:
+    """Gather public code repositories, org memberships, and commit metadata from GitHub API."""
+    if entity.entity_type == EntityType.ORG and entity.depth > 0 and any(
+        tag in p for p in entity.provenance for tag in ("registered_with", "hosted_on")
+    ):
+        return []
+
+    slug = re.sub(r"[^a-zA-Z0-9-]", "", entity.value.strip().lstrip("@"))
+    if not slug:
+        return []
+
+    headers = {"User-Agent": DEFAULT_USER_AGENT, "Accept": "application/vnd.github+json"}
+    hits: list[Hit] = []
+    seen_values: set[str] = set()
+
+    # 1. Public repositories
+    repos_url = (
+        f"https://api.github.com/orgs/{slug}/repos?sort=updated&per_page=8"
+        if entity.entity_type == EntityType.ORG
+        else f"https://api.github.com/users/{slug}/repos?sort=updated&per_page=8"
+    )
+    try:
+        r_resp = await client.get(repos_url, headers=headers, timeout=6.0)
+        if r_resp.status_code == 200 and isinstance(r_resp.json(), list):
+            for repo in r_resp.json()[:6]:
+                html_url = repo.get("html_url")
+                if not html_url or html_url in seen_values:
+                    continue
+                seen_values.add(html_url)
+                lang = repo.get("language") or "Unknown"
+                stars = repo.get("stargazers_count", 0)
+                desc = repo.get("description") or ""
+                hits.append(
+                    Hit(
+                        target_entity_id=entity.id,
+                        discovered_type=EntityType.PROFILE,
+                        discovered_value=html_url,
+                        relation="authored_repo",
+                        source_tool="github_code_intel",
+                        is_trusted=True,
+                        raw_data={
+                            "repo_name": repo.get("name"),
+                            "language": lang,
+                            "stars": stars,
+                            "description": f"[{lang}, {stars}★] {desc}".strip(),
+                        },
+                        metadata={
+                            "name": repo.get("name", ""),
+                            "bio": f"[{lang}, {stars}★] {desc}".strip(),
+                            "url": html_url,
+                        },
+                    )
+                )
+
+                # Extract custom project homepage domain
+                homepage = (repo.get("homepage") or "").strip()
+                if homepage.startswith("http"):
+                    hp_domain = _normalize_domain(homepage)
+                    if hp_domain and "github.com" not in hp_domain and hp_domain not in seen_values:
+                        seen_values.add(hp_domain)
+                        hits.append(
+                            Hit(
+                                target_entity_id=entity.id,
+                                discovered_type=EntityType.DOMAIN,
+                                discovered_value=hp_domain,
+                                relation="project_homepage",
+                                source_tool="github_code_intel",
+                                is_trusted=True,
+                                raw_data={"repo": repo.get("name")},
+                                metadata={"domain": hp_domain},
+                            )
+                        )
+    except Exception as exc:
+        logger.debug("GitHub repos lookup failed for %s: %s", slug, exc)
+
+    # 2. Organization memberships & public commit author emails (for USERNAME targets)
+    if entity.entity_type == EntityType.USERNAME:
+        try:
+            o_resp = await client.get(f"https://api.github.com/users/{slug}/orgs", headers=headers, timeout=5.0)
+            if o_resp.status_code == 200 and isinstance(o_resp.json(), list):
+                for org in o_resp.json()[:5]:
+                    org_login = org.get("login")
+                    if org_login and org_login.lower() not in seen_values:
+                        seen_values.add(org_login.lower())
+                        hits.append(
+                            Hit(
+                                target_entity_id=entity.id,
+                                discovered_type=EntityType.ORG,
+                                discovered_value=org_login,
+                                relation="member_of",
+                                source_tool="github_code_intel",
+                                is_trusted=True,
+                                raw_data={"description": org.get("description") or ""},
+                                metadata={"org": org_login},
+                            )
+                        )
+        except Exception:
+            pass
+
+        try:
+            e_resp = await client.get(
+                f"https://api.github.com/users/{slug}/events/public?per_page=15",
+                headers=headers,
+                timeout=5.0,
+            )
+            if e_resp.status_code == 200 and isinstance(e_resp.json(), list):
+                for ev in e_resp.json():
+                    if ev.get("type") != "PushEvent":
+                        continue
+                    for commit in ev.get("payload", {}).get("commits", []):
+                        author = commit.get("author", {})
+                        email = (author.get("email") or "").strip().lower()
+                        if (
+                            email
+                            and "@" in email
+                            and "noreply.github.com" not in email
+                            and email not in seen_values
+                        ):
+                            seen_values.add(email)
+                            hits.append(
+                                Hit(
+                                    target_entity_id=entity.id,
+                                    discovered_type=EntityType.EMAIL,
+                                    discovered_value=email,
+                                    relation="commit_author_email",
+                                    source_tool="github_code_intel",
+                                    is_trusted=True,
+                                    raw_data={"author_name": author.get("name")},
+                                    metadata={"email": email},
+                                )
+                            )
+        except Exception:
+            pass
 
     return hits

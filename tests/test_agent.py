@@ -493,6 +493,59 @@ async def test_tool_web_archive_crawl_collector() -> None:
 
 @pytest.mark.asyncio
 @respx.mock
+async def test_tool_github_code_intel_collector() -> None:
+    """github_code_intel should discover repos, homepage domains, orgs, and commit emails."""
+    from osint_agent.collectors.tools import collect_github_code_intel
+
+    respx.get("https://api.github.com/users/devjane/repos?sort=updated&per_page=8").mock(
+        return_value=httpx.Response(
+            200,
+            json=[
+                {
+                    "name": "ai-agent",
+                    "html_url": "https://github.com/devjane/ai-agent",
+                    "language": "Python",
+                    "stargazers_count": 42,
+                    "description": "Autonomous ML agent",
+                    "homepage": "https://ai-agent.dev",
+                }
+            ],
+        )
+    )
+    respx.get("https://api.github.com/users/devjane/orgs").mock(
+        return_value=httpx.Response(200, json=[{"login": "OpenResearch", "description": "AI lab"}])
+    )
+    respx.get("https://api.github.com/users/devjane/events/public?per_page=15").mock(
+        return_value=httpx.Response(
+            200,
+            json=[
+                {
+                    "type": "PushEvent",
+                    "payload": {
+                        "commits": [
+                            {"author": {"name": "Jane", "email": "jane@ai-agent.dev"}},
+                            {"author": {"name": "Jane", "email": "devjane@users.noreply.github.com"}},
+                        ]
+                    },
+                }
+            ],
+        )
+    )
+
+    user_entity = Entity.create(entity_type=EntityType.USERNAME, value="devjane")
+    async with httpx.AsyncClient() as client:
+        hits = await collect_github_code_intel(user_entity, client)
+
+    values = [h.discovered_value for h in hits]
+    assert "https://github.com/devjane/ai-agent" in values
+    assert "ai-agent.dev" in values
+    assert "OpenResearch" in values
+    assert "jane@ai-agent.dev" in values
+    assert "devjane@users.noreply.github.com" not in values
+
+
+@pytest.mark.asyncio
+@respx.mock
 async def test_cli_execution_with_consent(tmp_path: Path) -> None:
     """CLI runner should successfully execute and write graph and audit files."""
     from osint_agent.cli import main_async, parse_args
