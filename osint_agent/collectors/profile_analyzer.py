@@ -1017,10 +1017,11 @@ def _resolve_optional_llm_client(llm_client: Any = None) -> Any:
 
 
 async def _llm_enrich_batch(hits: list[Hit], llm_client: Any, batch_size: int = 6) -> None:
-    """Use ML to rank & compress scraped profile text first, then run batched multimodal LLM extraction."""
+    """Use ML to rank & compress scraped profile text first, then run at most ONE batched LLM extraction on unstructured hits."""
+    from osint_agent.llm.client import LLMRateLimitError
     from osint_agent.ml.profile_matcher import compress_profile_text_ml, rank_profiles_for_llm
 
-    rich_hits = rank_profiles_for_llm(hits)
+    rich_hits = rank_profiles_for_llm(hits, max_profiles=batch_size)
     if not rich_hits:
         return
 
@@ -1035,7 +1036,8 @@ async def _llm_enrich_batch(hits: list[Hit], llm_client: Any, batch_size: int = 
         "\"linked_urls\": [str], \"additional_facts\": {\"<field_name>\": \"<value>\"}, \"summary\": str}}}."
     )
 
-    for idx in range(0, len(rich_hits), batch_size):
+    # Single batch (max 6 unstructured profiles) to avoid spamming free-tier rate limits
+    for idx in range(0, min(len(rich_hits), batch_size), batch_size):
         chunk = rich_hits[idx : idx + batch_size]
         payload_items = []
         image_urls: list[str] = []
@@ -1129,6 +1131,9 @@ async def _llm_enrich_batch(hits: list[Hit], llm_client: Any, batch_size: int = 
                     h.raw_data["description"] = (
                         f"{existing_desc} | {extracted['summary']}" if existing_desc else str(extracted["summary"])
                     )
+        except LLMRateLimitError as exc:
+            logger.info("Skipping remaining LLM enrichment due to rate-limit cooldown: %s", exc)
+            return
         except Exception as exc:
             logger.debug("LLM batch profile enrichment skipped for batch %d: %s", idx, exc)
 
@@ -1140,7 +1145,9 @@ async def analyze_profiles_batch(
     concurrency: int = 12,
     llm_client: Any = None,
 ) -> None:
-    """Concurrently analyze ALL discovered PROFILE hits up to max_profiles, with batched LLM extraction."""
+    """Concurrently analyze ALL discovered PROFILE hits up to max_profiles, enriching with ML first then optional LLM."""
+    from osint_agent.ml.profile_matcher import enrich_profiles_ml
+
     profile_hits = [h for h in hits if h.discovered_type == EntityType.PROFILE][:max_profiles]
     if not profile_hits:
         return
@@ -1152,6 +1159,9 @@ async def analyze_profiles_batch(
             await analyze_profile_hit(h, client)
 
     await asyncio.gather(*[_run_one(h) for h in profile_hits], return_exceptions=True)
+
+    # Always run free local ML enrichment (TF-IDF extractive summaries, skill matching, spaCy NER) FIRST
+    enrich_profiles_ml(profile_hits)
 
     active_llm = _resolve_optional_llm_client(llm_client)
     if active_llm is not None:

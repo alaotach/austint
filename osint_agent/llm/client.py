@@ -92,6 +92,20 @@ class LLMBudgetExceededError(RuntimeError):
     pass
 
 
+class LLMRateLimitError(RuntimeError):
+    """Raised immediately when provider returns 429 so callers fall back to ML without spamming."""
+    pass
+
+
+_RATE_LIMIT_COOLDOWN_UNTIL: float = 0.0
+
+
+def reset_rate_limit_cooldown() -> None:
+    """Reset shared rate-limit cooldown (primarily for tests)."""
+    global _RATE_LIMIT_COOLDOWN_UNTIL
+    _RATE_LIMIT_COOLDOWN_UNTIL = 0.0
+
+
 class LLMResult(dict):
     """Dictionary containing parsed JSON payload plus token usage metadata."""
 
@@ -355,8 +369,16 @@ class OpenRouterClient(BaseClient):
         image_urls: list[str] | None = None,
         max_tokens: int = 1000,
     ) -> dict[str, Any]:
+        global _RATE_LIMIT_COOLDOWN_UNTIL
         if not self.api_key:
             raise ValueError("OPENROUTER_API_KEY is not configured in environment.")
+
+        now = time.monotonic()
+        if now < _RATE_LIMIT_COOLDOWN_UNTIL:
+            remaining = int(_RATE_LIMIT_COOLDOWN_UNTIL - now)
+            raise LLMRateLimitError(
+                f"OpenRouter cooldown active ({remaining}s remaining); skipping LLM call."
+            )
 
         self._check_budget()
         headers = {
@@ -393,9 +415,8 @@ class OpenRouterClient(BaseClient):
             ],
         }
 
-        # Retry schedule: (delay_before_attempt_seconds)
-        # Attempts: 0s → 3s → 8s  (3 total attempts)
-        _RETRY_DELAYS = [0, 3, 8]
+        # Fail fast on 429; allow at most 1 quick retry (1.5s) on transient errors
+        _RETRY_DELAYS = [0.0, 1.5]
         _MAX_ATTEMPTS = len(_RETRY_DELAYS)
 
         last_exc: Exception | None = None
@@ -406,22 +427,16 @@ class OpenRouterClient(BaseClient):
                 with httpx.Client(timeout=self.timeout) as client:
                     resp = client.post(self.base_url, json=payload, headers=headers)
 
-                    # 429 rate-limit: respect Retry-After header or back off longer
+                    # 429 rate-limit: trip circuit breaker immediately — NEVER spam retries
                     if resp.status_code == 429:
-                        retry_after = int(resp.headers.get("Retry-After", 0))
-                        wait = max(retry_after, 10 + attempt * 5)
+                        retry_after = int(resp.headers.get("Retry-After", 0) or 0)
+                        cooldown = max(retry_after, 90)
+                        _RATE_LIMIT_COOLDOWN_UNTIL = time.monotonic() + cooldown
                         logger.warning(
-                            "OpenRouter 429 rate-limited (attempt %d/%d). Waiting %ds before retry.",
-                            attempt + 1, _MAX_ATTEMPTS, wait,
+                            "OpenRouter 429 rate-limited — tripping %ds cooldown and falling back to ML.",
+                            cooldown,
                         )
-                        last_exc = httpx.HTTPStatusError(
-                            "429 Too Many Requests",
-                            request=resp.request,
-                            response=resp,
-                        )
-                        if attempt < _MAX_ATTEMPTS - 1:
-                            time.sleep(wait)
-                        continue
+                        raise LLMRateLimitError("429 Too Many Requests — circuit breaker tripped")
 
                     # 400 Bad Request: often caused by an unreachable/unsupported image_url
                     # or a text-only model selected by the router; strip images and fall back.
@@ -471,6 +486,8 @@ class OpenRouterClient(BaseClient):
                     )
                     return self._parse_payload(raw_text, token_count)
 
+            except LLMRateLimitError:
+                raise
             except (httpx.HTTPStatusError, httpx.RequestError, httpx.TimeoutException, ValueError) as exc:
                 last_exc = exc
                 logger.warning(

@@ -1360,36 +1360,30 @@ def test_parse_payload_raises_on_truly_empty() -> None:
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_openrouter_client_429_retries_with_backoff() -> None:
-    """OpenRouterClient should retry on 429 and eventually succeed on 3rd attempt."""
-    import time as _time
-    from unittest.mock import patch
-    from osint_agent.llm.client import OpenRouterClient
+async def test_openrouter_client_429_trips_circuit_breaker_without_spam() -> None:
+    """OpenRouterClient must fail fast on 429 and trip cooldown instead of spamming retries."""
+    from osint_agent.llm.client import LLMRateLimitError, OpenRouterClient, reset_rate_limit_cooldown
 
+    reset_rate_limit_cooldown()
     call_count = 0
 
     def side_effect(request):
         nonlocal call_count
         call_count += 1
-        if call_count <= 2:
-            return httpx.Response(429, headers={"Retry-After": "0"}, json={"error": "rate limited"})
-        return httpx.Response(
-            200,
-            json={
-                "choices": [{"message": {"content": '{"status": "ok"}'}}],
-                "usage": {"total_tokens": 10},
-            },
-        )
+        return httpx.Response(429, headers={"Retry-After": "60"}, json={"error": "rate limited"})
 
     respx.post("https://ai.hackclub.com/proxy/v1/chat/completions").mock(side_effect=side_effect)
 
     client = OpenRouterClient(api_key="test-key", call_budget=5)
-    # Patch sleep to avoid actually waiting in tests
-    with patch("osint_agent.llm.client.time.sleep"):
-        res = client.complete_json(system="sys", user="usr", max_tokens=100)
-
-    assert res["status"] == "ok"
-    assert call_count == 3
+    try:
+        with pytest.raises(LLMRateLimitError):
+            client.complete_json(system="sys", user="usr", max_tokens=100)
+        # Second call during cooldown must not even hit the HTTP endpoint
+        with pytest.raises(LLMRateLimitError):
+            client.complete_json(system="sys", user="usr", max_tokens=100)
+        assert call_count == 1
+    finally:
+        reset_rate_limit_cooldown()
 
 
 @pytest.mark.asyncio
@@ -1752,3 +1746,45 @@ async def test_agent_run_follows_high_value_linked_profile_urls() -> None:
     attrs = graph.nodes[f"profile:{app_url}"]["attributes"]
     assert attrs["name"] == "Aryan Mishra"
     assert "Koraon, Uttar Pradesh 212306" in attrs["location"]
+
+
+def test_ml_enrichment_handles_structured_profiles_without_llm() -> None:
+    """enrich_profiles_ml should extract ml_summary and skills locally, and rank_profiles_for_llm should skip already-structured hits."""
+    from osint_agent.ml.profile_matcher import enrich_profiles_ml, rank_profiles_for_llm
+
+    structured_hit = Hit(
+        target_entity_id="username:alaotach",
+        discovered_type=EntityType.PROFILE,
+        discovered_value="https://play.google.com/store/apps/details?id=com.alaotach.eli5",
+        relation="linked_profile",
+        source_tool="playstore_intel",
+        metadata={
+            "name": "Aryan Mishra",
+            "location": "Koraon, India",
+            "email": "eryzalabs@gmail.com",
+            "bio": "Android Kotlin AI explainer app.",
+        },
+        raw_data={
+            "_page_text_excerpt": "ELI5 is an Android Kotlin and Python AI app built for fast explanations on mobile." * 5,
+        },
+    )
+    unstructured_hit = Hit(
+        target_entity_id="username:alaotach",
+        discovered_type=EntityType.PROFILE,
+        discovered_value="https://example.org/u/alaotach",
+        relation="account_on",
+        source_tool="maigret",
+        metadata={"site": "Example"},
+        raw_data={
+            "_page_text_excerpt": "AlAoTach is an engineer working with Python, FastAPI, Docker and PyTorch on open source OSINT tools. " * 6,
+        },
+    )
+
+    enrich_profiles_ml([structured_hit, unstructured_hit])
+    assert structured_hit.metadata.get("ml_summary")
+    assert "kotlin" in structured_hit.metadata.get("skills", [])
+    assert "python" in unstructured_hit.metadata.get("skills", [])
+
+    for_llm = rank_profiles_for_llm([structured_hit, unstructured_hit], max_profiles=6)
+    assert structured_hit not in for_llm
+    assert unstructured_hit in for_llm

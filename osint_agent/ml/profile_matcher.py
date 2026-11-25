@@ -58,8 +58,74 @@ def compress_profile_text_ml(text: str, max_chars: int = 1200) -> str:
         return raw[:max_chars]
 
 
-def rank_profiles_for_llm(hits: list[Any]) -> list[Any]:
-    """Filter and rank scraped profile hits by ML informativeness before sending batches to the LLM."""
+_SKILL_VOCAB = (
+    "python", "kotlin", "java", "javascript", "typescript", "react", "nextjs", "node",
+    "fastapi", "django", "flask", "android", "flutter", "swift", "rust", "go", "c++",
+    "pytorch", "tensorflow", "sklearn", "scikit-learn", "machine learning", "deep learning",
+    "nlp", "ai", "llm", "docker", "kubernetes", "aws", "gcp", "sql", "postgresql", "mongodb",
+)
+
+
+def enrich_profiles_ml(hits: list[Any]) -> None:
+    """Use local ML/NLP (TF-IDF extractive summary, skill matching, spaCy NER) to enrich profiles without any LLM API call."""
+    nlp = None
+    try:
+        from osint_agent.collectors.extractor import get_spacy_nlp
+        nlp = get_spacy_nlp()
+    except Exception:
+        nlp = None
+
+    for h in hits:
+        meta = getattr(h, "metadata", None)
+        raw = getattr(h, "raw_data", None)
+        if not isinstance(meta, dict) or not isinstance(raw, dict):
+            continue
+
+        excerpt = str(raw.get("_page_text_excerpt") or "")
+        bio = str(meta.get("bio") or "")
+        combined = " ".join(p for p in (bio, excerpt) if p).strip()
+        if not combined:
+            continue
+
+        # 1. Extractive TF-IDF summary when bio is short/missing or no summary exists
+        if excerpt and not meta.get("ml_summary"):
+            summary = compress_profile_text_ml(excerpt, max_chars=280)
+            if summary and len(summary) >= 30:
+                meta["ml_summary"] = summary
+
+        # 2. Tech/domain skill extraction
+        low = combined.lower()
+        found_skills = [
+            sk for sk in _SKILL_VOCAB
+            if re.search(rf"(?<![a-z0-9]){re.escape(sk)}(?![a-z0-9])", low)
+        ]
+        if found_skills:
+            existing_sk = list(meta.get("skills") or [])
+            meta["skills"] = list(dict.fromkeys(existing_sk + found_skills))[:12]
+
+        # 3. Local spaCy NER for missing name / location / organizations
+        if nlp is not None and (not meta.get("name") or not meta.get("location") or not meta.get("organizations")):
+            try:
+                doc = nlp(combined[:1500])
+                orgs: list[str] = list(meta.get("organizations") or [])
+                for ent in doc.ents:
+                    val = ent.text.strip()
+                    if len(val) < 2 or len(val) > 80:
+                        continue
+                    if ent.label_ == "PERSON" and not meta.get("name"):
+                        meta["name"] = val
+                    elif ent.label_ == "GPE" and not meta.get("location"):
+                        meta["location"] = val
+                    elif ent.label_ == "ORG" and val not in orgs:
+                        orgs.append(val)
+                if orgs:
+                    meta["organizations"] = orgs[:5]
+            except Exception:
+                pass
+
+
+def rank_profiles_for_llm(hits: list[Any], max_profiles: int = 6) -> list[Any]:
+    """Select ONLY unstructured, high-value profiles that still need LLM extraction (after ML enrichment)."""
     scored: list[tuple[float, Any]] = []
     for h in hits:
         meta = getattr(h, "metadata", {}) or {}
@@ -68,19 +134,30 @@ def rank_profiles_for_llm(hits: list[Any]) -> list[Any]:
         bio = str(meta.get("bio") or "")
         stories = meta.get("stories") or []
         kws = meta.get("ml_keywords") or []
+
+        # Skip profiles with no text at all
         if not excerpt and not bio and not stories:
             continue
 
+        # Skip profiles already richly structured by deterministic APIs/Play Store/GitHub/ML
+        already_structured = bool(
+            meta.get("name")
+            and (meta.get("location") or meta.get("office_address") or meta.get("email") or meta.get("extra_fields"))
+            and (bio or stories)
+        )
+        if already_structured:
+            continue
+
         info_score = (
-            min(1.0, len(bio) / 200.0) * 0.35
-            + min(1.0, len(excerpt) / 1500.0) * 0.25
+            min(1.0, len(bio) / 200.0) * 0.30
+            + min(1.0, len(excerpt) / 1500.0) * 0.35
             + min(1.0, len(kws) / 6.0) * 0.20
-            + (0.20 if stories or meta.get("email") or meta.get("location") else 0.0)
+            + (0.15 if stories or meta.get("email") or meta.get("location") else 0.0)
         )
         scored.append((info_score, h))
 
     scored.sort(key=lambda x: x[0], reverse=True)
-    return [h for _, h in scored]
+    return [h for _, h in scored[:max_profiles]]
 
 
 def extract_profile_keywords(text: str, top_k: int = 8) -> list[str]:
