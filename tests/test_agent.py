@@ -546,6 +546,42 @@ async def test_tool_github_code_intel_collector() -> None:
 
 @pytest.mark.asyncio
 @respx.mock
+async def test_tool_threat_intel_collector() -> None:
+    """threat_intel should query keyless URLScan.io public scans and extract ASN + report."""
+    from osint_agent.collectors.tools import collect_threat_intel
+
+    respx.get("https://urlscan.io/api/v1/search/").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "results": [
+                    {
+                        "page": {
+                            "ip": "104.21.13.80",
+                            "asn": "AS13335",
+                            "asnname": "CLOUDFLARENET, US",
+                            "country": "US",
+                            "domainAgeDays": 1200,
+                            "tlsIssuer": "Google Trust Services",
+                        },
+                        "result": "https://urlscan.io/api/v1/result/abc-123/",
+                    }
+                ]
+            },
+        )
+    )
+
+    domain_entity = Entity.create(entity_type=EntityType.DOMAIN, value="securelab.io")
+    async with httpx.AsyncClient() as client:
+        hits = await collect_threat_intel(domain_entity, client)
+
+    values = [h.discovered_value for h in hits]
+    assert "CLOUDFLARENET, US" in values
+    assert "https://urlscan.io/api/v1/result/abc-123/" in values
+
+
+@pytest.mark.asyncio
+@respx.mock
 async def test_cli_execution_with_consent(tmp_path: Path) -> None:
     """CLI runner should successfully execute and write graph and audit files."""
     from osint_agent.cli import main_async, parse_args

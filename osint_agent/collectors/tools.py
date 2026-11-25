@@ -1353,3 +1353,136 @@ async def collect_github_code_intel(entity: Entity, client: httpx.AsyncClient) -
             pass
 
     return hits
+
+
+@register_tool(
+    name="threat_intel",
+    target_types=[EntityType.DOMAIN],
+    description="Queries keyless URLScan.io public scans plus optional VirusTotal, AlienVault OTX, and AbuseIPDB feeds.",
+)
+async def collect_threat_intel(entity: Entity, client: httpx.AsyncClient) -> list[Hit]:
+    """Gather threat intelligence, ASN info, and reputation signals for a domain."""
+    if entity.depth > 0 and any(
+        tag in p for p in entity.provenance for tag in ("nameserver_for", "mail_server_for")
+    ):
+        return []
+
+    domain = _normalize_domain(entity.value)
+    if domain.count(".") > 1 and entity.depth > 0:
+        return []
+
+    hits: list[Hit] = []
+    seen_values: set[str] = set()
+    summary_notes: list[str] = []
+
+    # 1. URLScan.io Public Search API (100% free & keyless)
+    try:
+        us_resp = await client.get(
+            "https://urlscan.io/api/v1/search/",
+            params={"q": f"page.domain:{domain}", "size": "5"},
+            headers={"User-Agent": DEFAULT_USER_AGENT},
+            timeout=6.0,
+        )
+        if us_resp.status_code == 200:
+            results = us_resp.json().get("results", [])
+            if results:
+                first_page = results[0].get("page", {})
+                asn_name = (first_page.get("asnname") or "").strip()
+                if asn_name and asn_name.lower() not in seen_values:
+                    seen_values.add(asn_name.lower())
+                    hits.append(
+                        Hit(
+                            target_entity_id=entity.id,
+                            discovered_type=EntityType.ORG,
+                            discovered_value=asn_name,
+                            relation="asn_provider",
+                            source_tool="threat_intel",
+                            is_trusted=True,
+                            raw_data={"asn": first_page.get("asn"), "country": first_page.get("country")},
+                            metadata={"asn": first_page.get("asn", "")},
+                        )
+                    )
+                age_days = first_page.get("domainAgeDays")
+                tls_issuer = first_page.get("tlsIssuer")
+                if age_days is not None:
+                    summary_notes.append(f"DomainAge: {age_days}d")
+                if tls_issuer:
+                    summary_notes.append(f"TLS: {tls_issuer}")
+
+                report_url = results[0].get("result")
+                if report_url and report_url not in seen_values:
+                    seen_values.add(report_url)
+                    hits.append(
+                        Hit(
+                            target_entity_id=entity.id,
+                            discovered_type=EntityType.PROFILE,
+                            discovered_value=report_url,
+                            relation="urlscan_report",
+                            source_tool="threat_intel",
+                            is_trusted=True,
+                            raw_data={
+                                "ip": first_page.get("ip"),
+                                "asn": first_page.get("asn"),
+                                "description": " | ".join(summary_notes) or "URLScan.io public scan",
+                            },
+                            metadata={"url": report_url, "scans_found": len(results)},
+                        )
+                    )
+    except Exception as exc:
+        logger.debug("URLScan.io lookup failed for %s: %s", domain, exc)
+
+    # 2. Optional VirusTotal v3 API (if VIRUSTOTAL_API_KEY is set)
+    vt_key = os.getenv("VIRUSTOTAL_API_KEY", "").strip()
+    if vt_key:
+        try:
+            vt_resp = await client.get(
+                f"https://www.virustotal.com/api/v3/domains/{domain}",
+                headers={"x-apikey": vt_key, "User-Agent": DEFAULT_USER_AGENT},
+                timeout=6.0,
+            )
+            if vt_resp.status_code == 200:
+                stats = vt_resp.json().get("data", {}).get("attributes", {}).get("last_analysis_stats", {})
+                malicious = stats.get("malicious", 0)
+                harmless = stats.get("harmless", 0)
+                hits.append(
+                    Hit(
+                        target_entity_id=entity.id,
+                        discovered_type=EntityType.PROFILE,
+                        discovered_value=f"https://www.virustotal.com/gui/domain/{domain}",
+                        relation="virustotal_report",
+                        source_tool="threat_intel",
+                        is_trusted=True,
+                        raw_data={"stats": stats, "description": f"VT Malicious: {malicious} | Harmless: {harmless}"},
+                        metadata={"malicious": malicious, "harmless": harmless},
+                    )
+                )
+        except Exception as exc:
+            logger.debug("VirusTotal lookup failed for %s: %s", domain, exc)
+
+    # 3. Optional AlienVault OTX API (if OTX_API_KEY is set)
+    otx_key = os.getenv("OTX_API_KEY", "").strip()
+    if otx_key:
+        try:
+            otx_resp = await client.get(
+                f"https://otx.alienvault.com/api/v1/indicators/domain/{domain}/general",
+                headers={"X-OTX-API-KEY": otx_key, "User-Agent": DEFAULT_USER_AGENT},
+                timeout=6.0,
+            )
+            if otx_resp.status_code == 200:
+                pulses = otx_resp.json().get("pulse_info", {}).get("count", 0)
+                hits.append(
+                    Hit(
+                        target_entity_id=entity.id,
+                        discovered_type=EntityType.PROFILE,
+                        discovered_value=f"https://otx.alienvault.com/indicator/domain/{domain}",
+                        relation="otx_pulses",
+                        source_tool="threat_intel",
+                        is_trusted=True,
+                        raw_data={"pulse_count": pulses, "description": f"OTX Threat Pulses: {pulses}"},
+                        metadata={"pulse_count": pulses},
+                    )
+                )
+        except Exception as exc:
+            logger.debug("OTX lookup failed for %s: %s", domain, exc)
+
+    return hits

@@ -248,7 +248,7 @@ def test_planner_registry_intersection(tmp_path: Path) -> None:
 def test_planner_already_run_removal() -> None:
     """Planner must not re-dispatch tools that have already been executed for this entity."""
     entity = Entity.create(entity_type=EntityType.DOMAIN, value="target.com")
-    entity.attributes["_tools_run"] = ["crtsh", "domain_intel", "web_archive_crawl"]
+    entity.attributes["_tools_run"] = ["crtsh", "domain_intel", "web_archive_crawl", "threat_intel"]
 
     rule_planner = RuleBasedPlanner()
     steps = rule_planner.plan(entity, graph_summary={}, remaining_budget=5)
