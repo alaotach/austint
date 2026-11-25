@@ -384,3 +384,70 @@ async def test_stream_username_check_offline() -> None:
     assert hits[0].metadata["name"] == "Stream User"
     assert hits[0].metadata["location"] == "Austin, TX"
     assert "Async OSINT engineer" in hits[0].metadata["bio"]
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_profile_analyzer_apis_and_html_links() -> None:
+    """Deep profile analyzer should extract GitHub, Bluesky, and generic HTML rel=me links."""
+    from osint_agent.collectors.profile_analyzer import analyze_profiles_batch
+
+    respx.get("https://api.github.com/users/devuser").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "name": "Dev User",
+                "bio": "Building open-source AI",
+                "location": "Berlin",
+                "company": "OpenLab",
+                "blog": "https://devuser.dev",
+                "followers": 420,
+            },
+        )
+    )
+    respx.get("https://api.github.com/users/devuser/social_accounts").mock(
+        return_value=httpx.Response(
+            200,
+            json=[{"provider": "linkedin", "url": "https://linkedin.com/in/devuser"}],
+        )
+    )
+    respx.get("https://public.api.bsky.app/xrpc/app.bsky.actor.getProfile").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "displayName": "Dev Bsky",
+                "description": "Researcher in Berlin",
+                "followersCount": 150,
+                "postsCount": 42,
+            },
+        )
+    )
+
+    gh_hit = Hit(
+        target_entity_id="username:devuser",
+        discovered_type=EntityType.PROFILE,
+        discovered_value="https://github.com/devuser",
+        relation="account_on",
+        source_tool="maigret",
+        metadata={"username": "devuser", "site": "GitHub", "url": "https://github.com/devuser"},
+    )
+    bsky_hit = Hit(
+        target_entity_id="username:devuser",
+        discovered_type=EntityType.PROFILE,
+        discovered_value="https://bsky.app/profile/devuser.bsky.social",
+        relation="account_on",
+        source_tool="maigret",
+        metadata={"username": "devuser.bsky.social", "site": "Bluesky", "url": "https://bsky.app/profile/devuser.bsky.social"},
+    )
+
+    async with httpx.AsyncClient() as client:
+        await analyze_profiles_batch([gh_hit, bsky_hit], client)
+
+    assert gh_hit.metadata["name"] == "Dev User"
+    assert gh_hit.metadata["company"] == "OpenLab"
+    assert gh_hit.metadata["followers"] == 420
+    assert "https://linkedin.com/in/devuser" in gh_hit.metadata["linked_urls"]
+    assert "devuser.dev" in gh_hit.raw_data["description"]
+
+    assert bsky_hit.metadata["name"] == "Dev Bsky"
+    assert bsky_hit.metadata["followers"] == 150

@@ -126,6 +126,7 @@ def format_graph_cytoscape(graph: Any) -> dict[str, Any]:
                 "confidence": round(float(attrs.get("confidence", 1.0)), 4),
                 "depth": int(attrs.get("depth", 0)),
                 "provenance": list(attrs.get("provenance", [])),
+                "attributes": dict(attrs.get("attributes", {})),
             }
         })
 

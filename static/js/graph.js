@@ -293,6 +293,7 @@ function convertToG6Data(cytoscapeElements) {
       confidence: d.confidence,
       depth: d.depth,
       provenance: d.provenance || [],
+      attributes: d.attributes || {},
       type: isSeed ? 'seed-pulse-node' : 'circle',
       size: isSeed ? 42 : 30,
       style: {

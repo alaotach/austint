@@ -14,8 +14,8 @@ import httpx
 import networkx as nx
 
 from osint_agent.core.audit import AuditLogger
-from osint_agent.collectors.enrich import fetch_profile_meta
 from osint_agent.collectors.extractor import extract_entities
+from osint_agent.collectors.profile_analyzer import analyze_profiles_batch
 from osint_agent.llm.planner import Planner, RuleBasedPlanner
 from osint_agent.ml.resolver import BaseResolver, BaselineWeightedResolver
 from osint_agent.core.schema import Entity, EntityType, Scope
@@ -169,22 +169,10 @@ class OSINTAgent:
                         },
                     )
 
-                    # Enrich profile hit metadata if URL is present (up to 15 per username)
-                    enriched_profiles_count = 0
-                    for hit in hits:
-                        if hit.discovered_type == EntityType.PROFILE and not hit.raw_data.get("description"):
-                            if enriched_profiles_count < 15:
-                                url = hit.metadata.get("url") or (
-                                    hit.discovered_value if hit.discovered_value.startswith("http") else ""
-                                )
-                                if url:
-                                    meta_text = await fetch_profile_meta(client, url)
-                                    if meta_text:
-                                        hit.raw_data["description"] = meta_text
-                                        hit.metadata["description"] = meta_text
-                                        hit.metadata["bio"] = meta_text
-                                        enriched_profiles_count += 1
+                    # Deeply analyze discovered PROFILE hits concurrently (platform APIs + HTML/JSON-LD/links)
+                    await analyze_profiles_batch(hits, client, max_profiles=40, concurrency=12)
 
+                    for hit in hits:
                         # 2. Score candidate hit using resolver
                         score = self.resolver.score(current_entity, hit)
                         accepted = self.resolver.should_accept(score, scope.accept_threshold)
@@ -233,6 +221,7 @@ class OSINTAgent:
                                 confidence=child_entity.confidence,
                                 depth=child_entity.depth,
                                 provenance=list(child_entity.provenance),
+                                attributes=dict(child_entity.attributes),
                             )
                         else:
                             existing_conf = graph.nodes[child_entity.id].get("confidence", 0.0)

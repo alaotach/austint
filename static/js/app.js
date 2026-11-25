@@ -217,6 +217,28 @@ function displayNodeDetails(data) {
   const panel = document.getElementById('inspector-content');
   const typeClass = (data.entityType || '').toLowerCase();
   const prov = (data.provenance || []).join(', ') || 'seed';
+  const attrs = data.attributes || {};
+
+  let extraFields = '';
+  const displayKeys = ['name', 'bio', 'location', 'company', 'website', 'email', 'followers', 'karma', 'joined'];
+  for (const k of displayKeys) {
+    if (attrs[k] !== undefined && attrs[k] !== '' && attrs[k] !== null) {
+      extraFields += `
+        <div class="inspector-field">
+          <span class="inspector-key">${escapeHtml(k)}</span>
+          <span class="inspector-val" style="font-size: 12px;">${escapeHtml(String(attrs[k]))}</span>
+        </div>
+      `;
+    }
+  }
+  if (Array.isArray(attrs.linked_urls) && attrs.linked_urls.length > 0) {
+    extraFields += `
+      <div class="inspector-field">
+        <span class="inspector-key">Linked Profiles / URLs</span>
+        <span class="inspector-val" style="font-size: 11px;">${attrs.linked_urls.map(u => escapeHtml(u)).join('<br>')}</span>
+      </div>
+    `;
+  }
 
   panel.innerHTML = `
     <div class="inspector-field">
@@ -239,6 +261,7 @@ function displayNodeDetails(data) {
       <span class="inspector-key">Chain Depth</span>
       <span class="inspector-val">${data.depth}</span>
     </div>
+    ${extraFields}
     <div class="inspector-field">
       <span class="inspector-key">Provenance</span>
       <span class="inspector-val" style="font-size: 11px;">${escapeHtml(prov)}</span>
