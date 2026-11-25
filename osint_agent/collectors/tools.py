@@ -1541,7 +1541,12 @@ async def collect_github_code_intel(entity: Entity, client: httpx.AsyncClient) -
     if not slug:
         return []
 
+    import os
+
     headers = {"User-Agent": DEFAULT_USER_AGENT, "Accept": "application/vnd.github+json"}
+    gh_token = os.environ.get("GITHUB_TOKEN", "").strip()
+    if gh_token:
+        headers["Authorization"] = f"Bearer {gh_token}"
     hits: list[Hit] = []
     seen_values: set[str] = set()
 
@@ -1554,7 +1559,7 @@ async def collect_github_code_intel(entity: Entity, client: httpx.AsyncClient) -
     try:
         r_resp = await client.get(repos_url, headers=headers, timeout=6.0)
         if r_resp.status_code == 200 and isinstance(r_resp.json(), list):
-            for repo in r_resp.json()[:6]:
+            for repo in r_resp.json()[:8]:
                 html_url = repo.get("html_url")
                 if not html_url or html_url in seen_values:
                     continue

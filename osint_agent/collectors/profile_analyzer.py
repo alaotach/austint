@@ -76,6 +76,116 @@ def _extract_username_from_url(url: str) -> str:
     return last
 
 
+def _github_api_headers() -> dict[str, str]:
+    import os
+
+    headers = {
+        "User-Agent": BROWSER_HEADERS["User-Agent"],
+        "Accept": "application/vnd.github+json",
+    }
+    token = os.environ.get("GITHUB_TOKEN", "").strip()
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return headers
+
+
+async def _analyze_github_repo(owner: str, repo: str, client: httpx.AsyncClient) -> dict[str, Any]:
+    """Deeply inspect a GitHub repository: metadata, README, commit author emails, manifests, and outbound links."""
+    info: dict[str, Any] = {"name": repo}
+    headers = _github_api_headers()
+    base = f"https://api.github.com/repos/{owner}/{repo}"
+
+    try:
+        repo_r, readme_r, commits_r, contents_r = await asyncio.gather(
+            client.get(base, headers=headers, timeout=6.0),
+            client.get(f"{base}/readme", headers={**headers, "Accept": "application/vnd.github.raw+json"}, timeout=6.0),
+            client.get(f"{base}/commits?per_page=15", headers=headers, timeout=6.0),
+            client.get(f"{base}/contents", headers=headers, timeout=6.0),
+            return_exceptions=True,
+        )
+
+        excerpt_parts: list[str] = []
+        linked_urls: list[str] = []
+        emails: list[str] = []
+
+        if isinstance(repo_r, httpx.Response) and repo_r.status_code == 200:
+            d = repo_r.json()
+            lang = d.get("language") or ""
+            stars = d.get("stargazers_count", 0)
+            desc = (d.get("description") or "").strip()
+            topics = d.get("topics") or []
+            homepage = (d.get("homepage") or "").strip()
+            bio_parts = []
+            if lang or stars:
+                bio_parts.append(f"[{lang or 'Code'}, {stars}★]")
+            if desc:
+                bio_parts.append(desc)
+            if topics:
+                bio_parts.append("Topics: " + ", ".join(str(t) for t in topics[:8]))
+            if bio_parts:
+                info["bio"] = " ".join(bio_parts)
+                excerpt_parts.append(info["bio"])
+            if homepage.startswith("http"):
+                info["website"] = homepage
+                linked_urls.append(homepage)
+
+        if isinstance(readme_r, httpx.Response) and readme_r.status_code == 200:
+            readme_text = readme_r.text[:12_000]
+            if readme_text.strip():
+                excerpt_parts.append(readme_text[:4000])
+                for u in re.findall(r"https?://[^\s\)\]>\"']+", readme_text):
+                    if not any(ign in u.lower() for ign in _IGNORED_EXT_DOMAINS) and not u.lower().endswith((".png", ".jpg", ".svg", ".gif")):
+                        linked_urls.append(u.rstrip(".,;:"))
+                for em in re.findall(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}", readme_text):
+                    if "noreply.github.com" not in em.lower() and not em.lower().endswith((".png", ".jpg", ".svg")):
+                        emails.append(em.lower())
+
+        if isinstance(commits_r, httpx.Response) and commits_r.status_code == 200 and isinstance(commits_r.json(), list):
+            for c in commits_r.json():
+                ca = ((c.get("commit") or {}).get("author") or {})
+                em = (ca.get("email") or "").strip().lower()
+                if em and "@" in em and "noreply.github.com" not in em:
+                    emails.append(em)
+
+        # Inspect key manifest/domain files (CNAME, package.json, pyproject.toml, FUNDING.yml)
+        if isinstance(contents_r, httpx.Response) and contents_r.status_code == 200 and isinstance(contents_r.json(), list):
+            interesting = {"cname", "package.json", "pyproject.toml", "setup.cfg", "cargo.toml"}
+            targets = [
+                item.get("download_url")
+                for item in contents_r.json()
+                if isinstance(item, dict)
+                and str(item.get("name", "")).lower() in interesting
+                and item.get("download_url")
+            ][:2]
+            if targets:
+                manifest_resps = await asyncio.gather(
+                    *(client.get(u, timeout=4.0) for u in targets),
+                    return_exceptions=True,
+                )
+                for mr in manifest_resps:
+                    if isinstance(mr, httpx.Response) and mr.status_code == 200:
+                        mtxt = mr.text[:3000]
+                        excerpt_parts.append(mtxt)
+                        for em in re.findall(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}", mtxt):
+                            if "noreply.github.com" not in em.lower():
+                                emails.append(em.lower())
+                        for u in re.findall(r"https?://[^\s\)\]>\"']+", mtxt):
+                            linked_urls.append(u.rstrip(".,;:"))
+
+        if emails:
+            dedup_emails = list(dict.fromkeys(emails))
+            info["email"] = dedup_emails[0]
+            info["contact_emails"] = dedup_emails[:4]
+        if linked_urls:
+            info["linked_urls"] = list(dict.fromkeys(linked_urls))[:12]
+        if excerpt_parts:
+            info["page_text_excerpt"] = "\n".join(excerpt_parts)[:5000]
+    except Exception:
+        pass
+
+    return info
+
+
 async def _analyze_github(username: str, client: httpx.AsyncClient) -> dict[str, Any]:
     """Fetch public profile, social accounts, and top repo languages from GitHub API."""
     info: dict[str, Any] = {}
@@ -518,11 +628,15 @@ async def analyze_profile_hit(hit: Hit, client: httpx.AsyncClient) -> dict[str, 
         return {}
 
     host = urlparse(url).netloc.lower()
+    path_parts = [p for p in urlparse(url).path.split("/") if p]
     username = hit.metadata.get("username") or _extract_username_from_url(url)
 
     info: dict[str, Any] = {}
-    if "github.com" in host and "gist.github.com" not in host and username:
-        info = await _analyze_github(username, client)
+    if "github.com" in host and "gist.github.com" not in host:
+        if len(path_parts) >= 2 and path_parts[1] not in ("orgs", "topics", "stars", "followers", "following"):
+            info = await _analyze_github_repo(path_parts[0], path_parts[1], client)
+        elif username:
+            info = await _analyze_github(username, client)
     elif "wattpad.com" in host and username:
         info = await _analyze_wattpad(username, client)
     elif "play.google.com" in host:

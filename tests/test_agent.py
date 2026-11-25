@@ -992,3 +992,55 @@ def test_ml_compress_and_rank_for_llm() -> None:
     high_hit = Hit(target_entity_id="u:1", discovered_type=EntityType.PROFILE, discovered_value="https://b.com", relation="account_on", source_tool="maigret", metadata={"bio": "AI researcher", "email": "x@y.com", "ml_keywords": ["ai", "research"]})
     ranked = rank_profiles_for_llm([low_hit, high_hit])
     assert ranked == [high_hit]
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_profile_analyzer_github_repo_deep_scrape() -> None:
+    """GitHub repo PROFILE hits should be deeply inspected via repo API, README, commits, and manifests."""
+    from osint_agent.collectors.profile_analyzer import analyze_profile_hit
+
+    respx.get("https://api.github.com/repos/alaotach/eli-new").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "name": "eli-new",
+                "description": "AI assistant project",
+                "language": "Python",
+                "stargazers_count": 5,
+                "topics": ["ai", "osint"],
+                "homepage": "https://eli.example.dev",
+            },
+        )
+    )
+    respx.get("https://api.github.com/repos/alaotach/eli-new/readme").mock(
+        return_value=httpx.Response(
+            200,
+            text="# Eli New\nDocs at https://docs.eli.example.dev\nContact: team@eli.example.dev",
+        )
+    )
+    respx.get("https://api.github.com/repos/alaotach/eli-new/commits?per_page=15").mock(
+        return_value=httpx.Response(
+            200,
+            json=[{"commit": {"author": {"email": "author@eli.example.dev"}}}],
+        )
+    )
+    respx.get("https://api.github.com/repos/alaotach/eli-new/contents").mock(
+        return_value=httpx.Response(200, json=[])
+    )
+
+    repo_hit = Hit(
+        target_entity_id="username:alaotach",
+        discovered_type=EntityType.PROFILE,
+        discovered_value="https://github.com/alaotach/eli-new",
+        relation="authored_repo",
+        source_tool="github_code_intel",
+        metadata={"url": "https://github.com/alaotach/eli-new"},
+    )
+    async with httpx.AsyncClient() as client:
+        info = await analyze_profile_hit(repo_hit, client)
+
+    assert info["website"] == "https://eli.example.dev"
+    assert repo_hit.metadata["email"] == "team@eli.example.dev"
+    assert "https://docs.eli.example.dev" in repo_hit.metadata["linked_urls"]
+    assert repo_hit.metadata.get("ml_keywords")
