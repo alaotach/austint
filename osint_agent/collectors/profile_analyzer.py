@@ -590,6 +590,17 @@ async def analyze_profile_hit(hit: Hit, client: httpx.AsyncClient) -> dict[str, 
     if combined_desc:
         hit.raw_data["description"] = combined_desc
 
+    # Extract ML TF-IDF keywords from scraped text + bio
+    ml_source = " ".join(
+        p for p in (combined_desc, info.get("page_text_excerpt", "")) if p
+    )
+    if ml_source:
+        from osint_agent.ml.profile_matcher import extract_profile_keywords
+
+        kws = extract_profile_keywords(ml_source, top_k=6)
+        if kws:
+            hit.metadata["ml_keywords"] = kws
+
     return info
 
 

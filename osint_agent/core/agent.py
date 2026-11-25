@@ -16,6 +16,7 @@ import networkx as nx
 from osint_agent.core.audit import AuditLogger
 from osint_agent.collectors.extractor import extract_entities
 from osint_agent.collectors.profile_analyzer import analyze_profiles_batch, synthesize_profile_relations
+from osint_agent.ml.profile_matcher import discover_ml_profile_relations
 from osint_agent.llm.planner import Planner, RuleBasedPlanner
 from osint_agent.ml.resolver import BaseResolver, BaselineWeightedResolver
 from osint_agent.core.schema import Entity, EntityType, Scope
@@ -315,6 +316,7 @@ class OSINTAgent:
                                             ),
                                         )
 
+            discover_ml_profile_relations(graph)
             await synthesize_profile_relations(graph)
 
             self.audit.log_event(

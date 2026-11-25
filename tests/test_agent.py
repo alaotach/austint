@@ -915,3 +915,60 @@ async def test_profile_analyzer_wattpad_playstore_and_synthesis() -> None:
     synth = await synthesize_profile_relations(g, llm_client=fake_llm)
     assert synth is not None
     assert g.has_edge("profile:wattpad", "profile:play")
+
+
+def test_ml_profile_matcher_clustering_and_keywords() -> None:
+    """ML profile_matcher should extract TF-IDF keywords, link similar profiles, and cluster identities."""
+    import networkx as nx
+
+    from osint_agent.ml.profile_matcher import discover_ml_profile_relations, extract_profile_keywords
+
+    kws = extract_profile_keywords(
+        "Building autonomous robotics simulation pipelines in Python and PyTorch at Delhi Tech.",
+        top_k=5,
+    )
+    assert len(kws) > 0
+
+    g = nx.DiGraph()
+    g.add_node(
+        "profile:gh",
+        entity_type="profile",
+        value="https://github.com/alaotach",
+        attributes={
+            "username": "alaotach",
+            "name": "Aryan Mishra",
+            "bio": "Autonomous robotics and Python developer building OSINT graphs.",
+            "location": "New Delhi, India",
+            "linked_urls": ["https://alaotach.dev"],
+        },
+    )
+    g.add_node(
+        "profile:hf",
+        entity_type="profile",
+        value="https://huggingface.co/alaotach",
+        attributes={
+            "username": "alaotach",
+            "name": "Aryan Mishra",
+            "bio": "Python ML engineer working on autonomous robotics and OSINT.",
+            "location": "New Delhi",
+            "linked_urls": ["https://alaotach.dev/models"],
+        },
+    )
+    g.add_node(
+        "profile:unrelated",
+        entity_type="profile",
+        value="https://example.com/chef99",
+        attributes={
+            "username": "chef_luigi_99",
+            "name": "Luigi Rossi",
+            "bio": "Pastry chef baking sourdough bread in Milan.",
+            "location": "Milan, Italy",
+        },
+    )
+
+    res = discover_ml_profile_relations(g, similarity_threshold=0.45)
+    assert res["edges_added"] >= 1
+    assert g.has_edge("profile:gh", "profile:hf")
+    assert not g.has_edge("profile:gh", "profile:unrelated")
+    assert g.nodes["profile:gh"]["attributes"]["ml_cluster_id"] == g.nodes["profile:hf"]["attributes"]["ml_cluster_id"]
+    assert g.nodes["profile:gh"]["attributes"]["ml_cluster_id"] != g.nodes["profile:unrelated"]["attributes"]["ml_cluster_id"]
