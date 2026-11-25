@@ -1486,3 +1486,179 @@ async def collect_threat_intel(entity: Entity, client: httpx.AsyncClient) -> lis
             logger.debug("OTX lookup failed for %s: %s", domain, exc)
 
     return hits
+
+
+@register_tool(
+    name="open_data_intel",
+    target_types=[EntityType.ORG, EntityType.PUBLIC_FIGURE, EntityType.PLACE],
+    description="Queries Wikipedia summaries, OpenSky Network live flights over places, GDELT news, and optional OpenSanctions.",
+)
+async def collect_open_data_intel(entity: Entity, client: httpx.AsyncClient) -> list[Hit]:
+    """Gather open-data intelligence from Wikipedia, OpenSky Network, GDELT, and OpenSanctions."""
+    if entity.depth > 0 and any(
+        tag in p for p in entity.provenance for tag in ("registered_with", "hosted_on", "asn_provider", "nearby_landmark")
+    ):
+        return []
+
+    query = entity.value.strip()
+    if not query:
+        return []
+
+    hits: list[Hit] = []
+    seen_values: set[str] = set()
+
+    # 1. OpenSky Network live flights over a PLACE (free & keyless)
+    if entity.entity_type == EntityType.PLACE:
+        lat = entity.attributes.get("lat")
+        lon = entity.attributes.get("lon")
+        if lat is None or lon is None:
+            try:
+                nom_resp = await client.get(
+                    "https://nominatim.openstreetmap.org/search",
+                    params={"q": query, "format": "jsonv2", "limit": "1"},
+                    headers={"User-Agent": DEFAULT_USER_AGENT},
+                    timeout=5.0,
+                )
+                if nom_resp.status_code == 200 and nom_resp.json():
+                    lat = float(nom_resp.json()[0]["lat"])
+                    lon = float(nom_resp.json()[0]["lon"])
+            except Exception:
+                pass
+
+        if lat is not None and lon is not None:
+            try:
+                lat_f, lon_f = float(lat), float(lon)
+                os_resp = await client.get(
+                    "https://opensky-network.org/api/states/all",
+                    params={
+                        "lamin": f"{lat_f - 0.5:.4f}",
+                        "lomin": f"{lon_f - 0.5:.4f}",
+                        "lamax": f"{lat_f + 0.5:.4f}",
+                        "lomax": f"{lon_f + 0.5:.4f}",
+                    },
+                    headers={"User-Agent": DEFAULT_USER_AGENT},
+                    timeout=6.0,
+                )
+                if os_resp.status_code == 200:
+                    states = os_resp.json().get("states") or []
+                    for st in states[:5]:
+                        if not isinstance(st, list) or len(st) < 10:
+                            continue
+                        callsign = (st[1] or st[0] or "").strip()
+                        country = (st[2] or "Unknown").strip()
+                        alt_m = st[7] or st[13] or 0
+                        vel_ms = st[9] or 0
+                        if callsign and callsign not in seen_values:
+                            seen_values.add(callsign)
+                            hits.append(
+                                Hit(
+                                    target_entity_id=entity.id,
+                                    discovered_type=EntityType.PROFILE,
+                                    discovered_value=f"Flight {callsign} ({country})",
+                                    relation="live_flight_overhead",
+                                    source_tool="open_data_intel",
+                                    is_trusted=True,
+                                    raw_data={
+                                        "callsign": callsign,
+                                        "origin_country": country,
+                                        "altitude_m": alt_m,
+                                        "velocity_ms": vel_ms,
+                                        "description": f"Live flight {callsign} from {country} at {alt_m}m",
+                                    },
+                                    metadata={"callsign": callsign, "country": country},
+                                )
+                            )
+            except Exception as exc:
+                logger.debug("OpenSky lookup failed for %s: %s", query, exc)
+
+    # 2. Wikipedia REST Summary API (100% free & keyless)
+    if entity.entity_type in (EntityType.ORG, EntityType.PUBLIC_FIGURE, EntityType.PLACE):
+        wiki_slug = query.replace(" ", "_")
+        try:
+            wk_resp = await client.get(
+                f"https://en.wikipedia.org/api/rest_v1/page/summary/{wiki_slug}",
+                headers={"User-Agent": DEFAULT_USER_AGENT},
+                follow_redirects=True,
+                timeout=5.0,
+            )
+            if wk_resp.status_code == 200:
+                wdata = wk_resp.json()
+                page_url = wdata.get("content_urls", {}).get("desktop", {}).get("page")
+                extract = wdata.get("extract", "")
+                if page_url and page_url not in seen_values:
+                    seen_values.add(page_url)
+                    hits.append(
+                        Hit(
+                            target_entity_id=entity.id,
+                            discovered_type=EntityType.PROFILE,
+                            discovered_value=page_url,
+                            relation="wikipedia_summary",
+                            source_tool="open_data_intel",
+                            is_trusted=True,
+                            raw_data={"description": extract[:500], "title": wdata.get("title")},
+                            metadata={"url": page_url, "bio": extract[:300]},
+                        )
+                    )
+        except Exception as exc:
+            logger.debug("Wikipedia summary failed for %s: %s", query, exc)
+
+    # 3. GDELT Global News Events (best-effort, free & keyless)
+    if entity.entity_type in (EntityType.ORG, EntityType.PUBLIC_FIGURE):
+        try:
+            gd_resp = await client.get(
+                "https://api.gdeltproject.org/api/v2/doc/doc",
+                params={"query": f'"{query}"', "mode": "ArtList", "maxrecords": "3", "format": "json"},
+                headers={"User-Agent": DEFAULT_USER_AGENT},
+                timeout=4.0,
+            )
+            if gd_resp.status_code == 200:
+                for art in gd_resp.json().get("articles", [])[:3]:
+                    art_url = art.get("url")
+                    if art_url and art_url not in seen_values:
+                        seen_values.add(art_url)
+                        hits.append(
+                            Hit(
+                                target_entity_id=entity.id,
+                                discovered_type=EntityType.PROFILE,
+                                discovered_value=art_url,
+                                relation="news_mention",
+                                source_tool="open_data_intel",
+                                is_trusted=True,
+                                raw_data={"title": art.get("title"), "description": art.get("title", "")},
+                                metadata={"url": art_url, "domain": art.get("domain", "")},
+                            )
+                        )
+        except Exception as exc:
+            logger.debug("GDELT lookup skipped/failed for %s: %s", query, exc)
+
+    # 4. Optional OpenSanctions API (if OPENSANCTIONS_API_KEY is set)
+    osanc_key = os.getenv("OPENSANCTIONS_API_KEY", "").strip()
+    if osanc_key and entity.entity_type in (EntityType.ORG, EntityType.PUBLIC_FIGURE):
+        try:
+            s_resp = await client.get(
+                "https://api.opensanctions.org/search/default",
+                params={"q": query, "limit": "3"},
+                headers={"Authorization": f"ApiKey {osanc_key}", "User-Agent": DEFAULT_USER_AGENT},
+                timeout=5.0,
+            )
+            if s_resp.status_code == 200:
+                for res in s_resp.json().get("results", [])[:3]:
+                    caption = res.get("caption")
+                    if caption and caption not in seen_values:
+                        seen_values.add(caption)
+                        hits.append(
+                            Hit(
+                                target_entity_id=entity.id,
+                                discovered_type=EntityType.PROFILE,
+                                discovered_value=f"https://www.opensanctions.org/entities/{res.get('id', '')}/",
+                                relation="sanctions_match",
+                                source_tool="open_data_intel",
+                                is_trusted=False,
+                                raw_data={"name": caption, "datasets": res.get("datasets", [])},
+                                metadata={"name": caption, "schema": res.get("schema", "")},
+                            )
+                        )
+        except Exception as exc:
+            logger.debug("OpenSanctions lookup failed for %s: %s", query, exc)
+
+    return hits

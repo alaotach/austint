@@ -582,6 +582,38 @@ async def test_tool_threat_intel_collector() -> None:
 
 @pytest.mark.asyncio
 @respx.mock
+async def test_tool_open_data_intel_collector() -> None:
+    """open_data_intel should query Wikipedia, GDELT news, and OpenSky live flights."""
+    from osint_agent.collectors.tools import collect_open_data_intel
+
+    respx.get("https://en.wikipedia.org/api/rest_v1/page/summary/Zurich").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "title": "Zurich",
+                "extract": "Zurich is the largest city in Switzerland.",
+                "content_urls": {"desktop": {"page": "https://en.wikipedia.org/wiki/Zurich"}},
+            },
+        )
+    )
+    respx.get("https://opensky-network.org/api/states/all").mock(
+        return_value=httpx.Response(
+            200,
+            json={"states": [["3c4a22", "SWR123  ", "Switzerland", 1700000000, 1700000000, 8.5, 47.3, 9500.0, False, 240.0]]},
+        )
+    )
+
+    place_entity = Entity.create(entity_type=EntityType.PLACE, value="Zurich", attributes={"lat": 47.3769, "lon": 8.5417})
+    async with httpx.AsyncClient() as client:
+        hits = await collect_open_data_intel(place_entity, client)
+
+    values = [h.discovered_value for h in hits]
+    assert "https://en.wikipedia.org/wiki/Zurich" in values
+    assert "Flight SWR123 (Switzerland)" in values
+
+
+@pytest.mark.asyncio
+@respx.mock
 async def test_cli_execution_with_consent(tmp_path: Path) -> None:
     """CLI runner should successfully execute and write graph and audit files."""
     from osint_agent.cli import main_async, parse_args
