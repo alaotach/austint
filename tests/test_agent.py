@@ -972,3 +972,23 @@ def test_ml_profile_matcher_clustering_and_keywords() -> None:
     assert not g.has_edge("profile:gh", "profile:unrelated")
     assert g.nodes["profile:gh"]["attributes"]["ml_cluster_id"] == g.nodes["profile:hf"]["attributes"]["ml_cluster_id"]
     assert g.nodes["profile:gh"]["attributes"]["ml_cluster_id"] != g.nodes["profile:unrelated"]["attributes"]["ml_cluster_id"]
+
+
+def test_ml_compress_and_rank_for_llm() -> None:
+    """ML compressor must keep OSINT-signal sentences over boilerplate and rank informative hits first."""
+    from osint_agent.ml.profile_matcher import compress_profile_text_ml, rank_profiles_for_llm
+
+    noisy = (
+        "Accept all cookies to continue browsing this website. "
+        "Sign in or register for a new account today. " * 20
+        + "Developer contact email: dev@example.org located at Tech Park New Delhi. "
+        + "Built open source autonomous robotics simulator and Android app."
+    )
+    compressed = compress_profile_text_ml(noisy, max_chars=250)
+    assert len(compressed) <= 250
+    assert "dev@example.org" in compressed or "robotics" in compressed
+
+    low_hit = Hit(target_entity_id="u:1", discovered_type=EntityType.PROFILE, discovered_value="https://a.com", relation="account_on", source_tool="maigret", metadata={})
+    high_hit = Hit(target_entity_id="u:1", discovered_type=EntityType.PROFILE, discovered_value="https://b.com", relation="account_on", source_tool="maigret", metadata={"bio": "AI researcher", "email": "x@y.com", "ml_keywords": ["ai", "research"]})
+    ranked = rank_profiles_for_llm([low_hit, high_hit])
+    assert ranked == [high_hit]

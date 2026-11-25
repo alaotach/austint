@@ -17,6 +17,70 @@ from osint_agent.ml.embeddings import get_embedding
 logger = logging.getLogger(__name__)
 
 _TOKEN_RE = re.compile(r"[a-zA-Z][a-zA-Z0-9_+-]{2,}")
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?|\n])\s+|\s*\|\s*")
+_SIGNAL_RE = re.compile(r"(@|https?://|\b(?:email|contact|address|location|office|story|stories|project|repo|app|developer|built|founder|student)\b)", re.IGNORECASE)
+
+
+def compress_profile_text_ml(text: str, max_chars: int = 1200) -> str:
+    """Use sentence-level TF-IDF + signal density to strip boilerplate and keep high-value sentences for LLM."""
+    raw = (text or "").strip()
+    if len(raw) <= max_chars:
+        return raw
+
+    sentences = [s.strip() for s in _SENTENCE_SPLIT_RE.split(raw) if len(s.strip()) >= 20]
+    if len(sentences) <= 2:
+        return raw[:max_chars]
+
+    try:
+        vec = TfidfVectorizer(stop_words="english", max_features=128)
+        mat = vec.fit_transform(sentences)
+        # Score each sentence by mean TF-IDF weight + bonus for OSINT contact/project/location signals
+        tfidf_scores = np.asarray(mat.sum(axis=1)).ravel() / np.maximum(1, np.asarray((mat > 0).sum(axis=1)).ravel())
+        ranked: list[tuple[float, int, str]] = []
+        for idx, sent in enumerate(sentences):
+            bonus = 0.35 * len(_SIGNAL_RE.findall(sent))
+            ranked.append((float(tfidf_scores[idx]) + bonus, idx, sent))
+        ranked.sort(key=lambda x: x[0], reverse=True)
+
+        chosen: list[tuple[int, str]] = []
+        total = 0
+        for _, idx, sent in ranked:
+            if total + len(sent) + 2 > max_chars and chosen:
+                continue
+            chosen.append((idx, sent))
+            total += len(sent) + 2
+            if total >= max_chars:
+                break
+        # Restore original reading order
+        chosen.sort(key=lambda x: x[0])
+        return " | ".join(s for _, s in chosen)[:max_chars]
+    except ValueError:
+        return raw[:max_chars]
+
+
+def rank_profiles_for_llm(hits: list[Any]) -> list[Any]:
+    """Filter and rank scraped profile hits by ML informativeness before sending batches to the LLM."""
+    scored: list[tuple[float, Any]] = []
+    for h in hits:
+        meta = getattr(h, "metadata", {}) or {}
+        raw = getattr(h, "raw_data", {}) or {}
+        excerpt = str(raw.get("_page_text_excerpt") or "")
+        bio = str(meta.get("bio") or "")
+        stories = meta.get("stories") or []
+        kws = meta.get("ml_keywords") or []
+        if not excerpt and not bio and not stories:
+            continue
+
+        info_score = (
+            min(1.0, len(bio) / 200.0) * 0.35
+            + min(1.0, len(excerpt) / 1500.0) * 0.25
+            + min(1.0, len(kws) / 6.0) * 0.20
+            + (0.20 if stories or meta.get("email") or meta.get("location") else 0.0)
+        )
+        scored.append((info_score, h))
+
+    scored.sort(key=lambda x: x[0], reverse=True)
+    return [h for _, h in scored]
 
 
 def extract_profile_keywords(text: str, top_k: int = 8) -> list[str]:

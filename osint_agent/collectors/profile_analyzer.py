@@ -627,17 +627,16 @@ def _resolve_optional_llm_client(llm_client: Any = None) -> Any:
 
 
 async def _llm_enrich_batch(hits: list[Hit], llm_client: Any, batch_size: int = 6) -> None:
-    """Use LLM (text + optional avatar/image URLs) in batches to extract structured OSINT details across ALL scraped profiles."""
-    rich_hits = [
-        h for h in hits
-        if h.raw_data.get("_page_text_excerpt") or h.metadata.get("bio") or h.metadata.get("stories")
-    ]
+    """Use ML to rank & compress scraped profile text first, then run batched multimodal LLM extraction."""
+    from osint_agent.ml.profile_matcher import compress_profile_text_ml, rank_profiles_for_llm
+
+    rich_hits = rank_profiles_for_llm(hits)
     if not rich_hits:
         return
 
     system = (
-        "You are an OSINT profile extraction assistant. Given a JSON list of scraped public profile pages "
-        "(and optional profile images), extract ONLY facts explicitly present for EACH profile URL. "
+        "You are an OSINT profile extraction assistant. Given a JSON list of ML-compressed public profile pages "
+        "(with TF-IDF keywords and optional profile images), extract ONLY facts explicitly present for EACH profile URL. "
         "Return valid JSON: {\"profiles\": {\"<url>\": {\"real_name\": str, \"office_or_location\": str, "
         "\"contact_emails\": [str], \"projects_or_stories\": [str], \"organizations\": [str], "
         "\"linked_urls\": [str], \"summary\": str}}}."
@@ -652,7 +651,8 @@ async def _llm_enrich_batch(hits: list[Hit], llm_client: Any, batch_size: int = 
         for h in chunk:
             url = str(h.metadata.get("url") or h.discovered_value)
             url_to_hit[url] = h
-            excerpt = str(h.raw_data.pop("_page_text_excerpt", ""))[:1800]
+            raw_excerpt = str(h.raw_data.pop("_page_text_excerpt", ""))
+            compressed_excerpt = compress_profile_text_ml(raw_excerpt, max_chars=1200)
             avatar_url = str(h.metadata.get("avatar_url") or "")
             if avatar_url.startswith("http") and avatar_url not in image_urls:
                 image_urls.append(avatar_url)
@@ -660,9 +660,10 @@ async def _llm_enrich_batch(hits: list[Hit], llm_client: Any, batch_size: int = 
                 {
                     "url": url,
                     "site": h.metadata.get("site", ""),
+                    "ml_keywords": h.metadata.get("ml_keywords", []),
                     "bio": str(h.metadata.get("bio", ""))[:400],
                     "stories": h.metadata.get("stories", [])[:3] if isinstance(h.metadata.get("stories"), list) else [],
-                    "page_text": excerpt,
+                    "page_text": compressed_excerpt,
                 }
             )
 
@@ -752,11 +753,13 @@ async def synthesize_profile_relations(graph: Any, llm_client: Any = None) -> di
         url = str(data.get("value") or "")
         url_to_node_id[url] = node_id
         # Include only profiles with meaningful scraped info
-        if any(attrs.get(k) for k in ("name", "bio", "location", "company", "stories", "email", "linked_urls", "projects_or_stories", "llm_summary")):
+        if any(attrs.get(k) for k in ("name", "bio", "location", "company", "stories", "email", "linked_urls", "projects_or_stories", "llm_summary", "ml_keywords")):
             profile_summaries.append(
                 {
                     "url": url,
                     "site": attrs.get("site", ""),
+                    "ml_cluster_id": attrs.get("ml_cluster_id"),
+                    "ml_keywords": attrs.get("ml_keywords", []),
                     "name": attrs.get("name", ""),
                     "bio": str(attrs.get("bio", ""))[:300],
                     "location": attrs.get("location", ""),
@@ -770,14 +773,33 @@ async def synthesize_profile_relations(graph: Any, llm_client: Any = None) -> di
     if len(profile_summaries) < 2:
         return None
 
+    ml_edges = [
+        {
+            "source_url": str(graph.nodes[u].get("value") or u),
+            "target_url": str(graph.nodes[v].get("value") or v),
+            "ml_score": edata.get("score"),
+            "signals": edata.get("evidence"),
+        }
+        for u, v, edata in graph.edges(data=True)
+        if edata.get("relation") == "ml_similar_profile"
+    ][:15]
+
     system = (
         "You are an OSINT intelligence analyst synthesizing connections across discovered public profiles. "
-        "Given JSON profiles, identify cross-profile relations, shared identities, projects, stories, "
-        "locations/offices, and contact details. Return ONLY valid JSON with keys: "
+        "You are given profiles pre-grouped by ML clustering (ml_cluster_id), TF-IDF keywords (ml_keywords), "
+        "and ML pairwise similarity edges (ml_edges). Build on these ML signals to validate identity clusters, "
+        "connect projects/stories/locations/offices/contact details, and return ONLY valid JSON with keys: "
         "summary (str), inferred_name (str), locations (list[str]), organizations (list[str]), "
         "relations (list of {source_url, target_url, relation, evidence})."
     )
-    user = json.dumps(profile_summaries[:25], ensure_ascii=False)
+    user = json.dumps(
+        {
+            "profiles": profile_summaries[:25],
+            "ml_clusters": (graph.graph.get("ml_profile_clusters") or {}).get("clusters", []),
+            "ml_edges": ml_edges,
+        },
+        ensure_ascii=False,
+    )
 
     try:
         result = await asyncio.to_thread(active_llm.complete_json, system, user, 900)
