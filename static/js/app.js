@@ -240,41 +240,123 @@ function exportGraphJson() {
   URL.revokeObjectURL(url);
 }
 
+function formatInspectorValue(val) {
+  if (Array.isArray(val)) {
+    return val.map(v => escapeHtml(typeof v === 'object' ? JSON.stringify(v) : String(v))).join(', ');
+  }
+  if (typeof val === 'object' && val !== null) {
+    return escapeHtml(JSON.stringify(val));
+  }
+  const str = String(val);
+  if (/^https?:\/\//i.test(str)) {
+    return `<a href="${escapeHtml(str)}" target="_blank" rel="noopener noreferrer" style="color: var(--color-primary); word-break: break-all;">${escapeHtml(str)}</a>`;
+  }
+  return escapeHtml(str);
+}
+
 function displayNodeDetails(data) {
   const panel = document.getElementById('inspector-content');
   const typeClass = (data.entityType || '').toLowerCase();
   const prov = (data.provenance || []).join(', ') || 'seed';
   const attrs = data.attributes || {};
 
-  let extraFields = '';
-  const displayKeys = ['name', 'bio', 'location', 'company', 'website', 'email', 'followers', 'karma', 'joined'];
-  for (const k of displayKeys) {
-    if (attrs[k] !== undefined && attrs[k] !== '' && attrs[k] !== null) {
-      extraFields += `
-        <div class="inspector-field">
-          <span class="inspector-key">${escapeHtml(k)}</span>
-          <span class="inspector-val" style="font-size: 12px;">${escapeHtml(String(attrs[k]))}</span>
-        </div>
-      `;
+  // 1. Render all discovered profile/app images (avatar_url + images array)
+  const imgList = [];
+  if (attrs.avatar_url && typeof attrs.avatar_url === 'string' && /^https?:\/\//i.test(attrs.avatar_url)) {
+    imgList.push(attrs.avatar_url);
+  }
+  if (Array.isArray(attrs.images)) {
+    for (const im of attrs.images) {
+      if (typeof im === 'string' && /^https?:\/\//i.test(im) && !imgList.includes(im)) {
+        imgList.push(im);
+      }
     }
   }
+  let imagesHtml = '';
+  if (imgList.length > 0) {
+    imagesHtml = `
+      <div class="inspector-field">
+        <span class="inspector-key">Images (${imgList.length})</span>
+        <div style="display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px;">
+          ${imgList.slice(0, 8).map(src => `
+            <a href="${escapeHtml(src)}" target="_blank" rel="noopener noreferrer" title="Open full image">
+              <img src="${escapeHtml(src)}" alt="Profile media"
+                   onerror="this.parentElement.style.display='none'"
+                   style="width: 56px; height: 56px; object-fit: cover; border-radius: 6px; border: 1px solid var(--border-color, #2d3748);" />
+            </a>
+          `).join('')}
+        </div>
+      </div>
+    `;
+  }
+
+  // 2. Render priority fields first, then dynamically render ALL remaining attributes + extra_fields
+  let extraFields = '';
+  const priorityKeys = [
+    'name', 'legal_name', 'aliases', 'job_title', 'company', 'organizations',
+    'bio', 'llm_summary', 'location', 'office_address',
+    'email', 'contact_emails', 'support_email', 'developer_email', 'phone_numbers', 'support_phone',
+    'website', 'privacy_policy_url', 'skills', 'stories', 'projects_or_stories',
+    'ml_keywords', 'ml_cluster_id', 'followers', 'karma', 'joined',
+    'risk_label', 'risk_score', 'exposed_data_types', 'password_exposure_note',
+    'computer_name', 'operating_system', 'stealer_type', 'date_compromised', 'total_user_services'
+  ];
+  const skipKeys = new Set(['avatar_url', 'images', 'linked_urls', 'extra_fields', 'url', 'site']);
+  const renderedKeys = new Set();
+
+  const appendField = (label, rawVal) => {
+    if (rawVal === undefined || rawVal === null || rawVal === '') return;
+    if (Array.isArray(rawVal) && rawVal.length === 0) return;
+    if (typeof rawVal === 'object' && !Array.isArray(rawVal) && Object.keys(rawVal).length === 0) return;
+    extraFields += `
+      <div class="inspector-field">
+        <span class="inspector-key">${escapeHtml(label)}</span>
+        <span class="inspector-val" style="font-size: 12px;">${formatInspectorValue(rawVal)}</span>
+      </div>
+    `;
+  };
+
+  for (const k of priorityKeys) {
+    if (attrs[k] !== undefined) {
+      appendField(k, attrs[k]);
+      renderedKeys.add(k);
+    }
+  }
+
+  // Dynamic open-ended keys on attrs
+  for (const [k, v] of Object.entries(attrs)) {
+    if (skipKeys.has(k) || renderedKeys.has(k)) continue;
+    appendField(k, v);
+    renderedKeys.add(k);
+  }
+
+  // Dynamic open-ended extra_fields dict (any newly discovered fields from scraper or LLM)
+  if (attrs.extra_fields && typeof attrs.extra_fields === 'object' && !Array.isArray(attrs.extra_fields)) {
+    for (const [ek, ev] of Object.entries(attrs.extra_fields)) {
+      if (renderedKeys.has(ek)) continue;
+      appendField(ek, ev);
+      renderedKeys.add(ek);
+    }
+  }
+
   if (Array.isArray(attrs.linked_urls) && attrs.linked_urls.length > 0) {
     extraFields += `
       <div class="inspector-field">
         <span class="inspector-key">Linked Profiles / URLs</span>
-        <span class="inspector-val" style="font-size: 11px;">${attrs.linked_urls.map(u => escapeHtml(u)).join('<br>')}</span>
+        <span class="inspector-val" style="font-size: 11px;">${attrs.linked_urls.map(u => `<a href="${escapeHtml(u)}" target="_blank" rel="noopener noreferrer" style="color: var(--color-primary); word-break: break-all;">${escapeHtml(u)}</a>`).join('<br>')}</span>
       </div>
     `;
   }
 
   panel.innerHTML = `
+    ${imagesHtml}
     <div class="inspector-field">
       <span class="inspector-key">Entity ID</span>
       <span class="inspector-val">${escapeHtml(data.id)}</span>
     </div>
     <div class="inspector-field">
       <span class="inspector-key">Value</span>
-      <span class="inspector-val">${escapeHtml(data.labelFull || data.label)}</span>
+      <span class="inspector-val">${formatInspectorValue(data.labelFull || data.label)}</span>
     </div>
     <div class="inspector-field">
       <span class="inspector-key">Entity Type</span>
