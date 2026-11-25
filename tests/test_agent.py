@@ -1535,4 +1535,4 @@ async def test_openrouter_client_reasoning_exhaustion_bumps_max_tokens() -> None
         res = client.complete_json(system="sys", user="usr", max_tokens=1200)
 
     assert res["extracted"] == "yes"
-    assert seen_max_tokens == [4096, 8192]
+    assert seen_max_tokens == [8192, 16384]

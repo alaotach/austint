@@ -381,8 +381,8 @@ class OpenRouterClient(BaseClient):
 
         # Reasoning models on openrouter/free (e.g. ernie-5.5, nemotron-reasoning, deepseek-r1)
         # consume output tokens in `message.reasoning` before emitting `message.content`.
-        # Ensure at least 4096 tokens so reasoning doesn't starve the JSON output.
-        effective_max_tokens = max(max_tokens, 4096)
+        # Ensure at least 8192 tokens so reasoning doesn't starve the JSON output.
+        effective_max_tokens = max(max_tokens, 8192)
 
         payload: dict[str, Any] = {
             "model": self.model,
@@ -454,7 +454,7 @@ class OpenRouterClient(BaseClient):
                     # Detect empty content body early (often reasoning model hit max_tokens)
                     if not raw_text.strip():
                         if finish_reason == "length" or has_reasoning:
-                            payload["max_tokens"] = min(int(payload["max_tokens"]) * 2, 8192)
+                            payload["max_tokens"] = min(int(payload["max_tokens"]) * 2, 16384)
                             raise ValueError(
                                 f"LLM returned empty content (model={data.get('model')}, "
                                 f"finish_reason={finish_reason!r}, reasoning_exhausted={has_reasoning}); "

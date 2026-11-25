@@ -815,10 +815,10 @@ async def _llm_enrich_batch(hits: list[Hit], llm_client: Any, batch_size: int = 
         try:
             if hasattr(llm_client, "complete_multimodal_json") and image_urls:
                 res = await asyncio.to_thread(
-                    llm_client.complete_multimodal_json, system, user, image_urls[:3], 1200
+                    llm_client.complete_multimodal_json, system, user, image_urls[:3], 4096
                 )
             else:
-                res = await asyncio.to_thread(llm_client.complete_json, system, user, 1200)
+                res = await asyncio.to_thread(llm_client.complete_json, system, user, 4096)
 
             profiles_map = res.get("profiles") if isinstance(res, dict) else None
             if not isinstance(profiles_map, dict):
@@ -946,7 +946,7 @@ async def synthesize_profile_relations(graph: Any, llm_client: Any = None) -> di
     )
 
     try:
-        result = await asyncio.to_thread(active_llm.complete_json, system, user, 1600)
+        result = await asyncio.to_thread(active_llm.complete_json, system, user, 4096)
         if not isinstance(result, dict):
             return None
 
