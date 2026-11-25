@@ -53,12 +53,48 @@ AVATAR_IMG_PATTERN = re.compile(
     re.IGNORECASE,
 )
 MAILTO_PATTERN = re.compile(r'mailto:([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})', re.IGNORECASE)
+TEL_PATTERN = re.compile(r'tel:([+\d][\d\s\-().]{6,20}\d)', re.IGNORECASE)
 EXT_LINK_PATTERN = re.compile(r'href=["\'](https?://[^"\'>\s]+)["\']', re.IGNORECASE)
 _IGNORED_EXT_DOMAINS = (
-    "w3.org", "schema.org", "fonts.googleapis.com", "fonts.gstatic.com",
-    "cdnjs.cloudflare.com", "googletagmanager.com", "google-analytics.com",
-    "apple.com/app", "play.google.com/intl", "policies.google.com",
+    "w3.org", "schema.org", "schemas.android.com", "xmlns.com", "purl.org",
+    "fonts.googleapis.com", "fonts.gstatic.com", "gstatic.com",
+    "cdnjs.cloudflare.com", "cloudflare.com", "cdn.jsdelivr.net", "unpkg.com",
+    "googletagmanager.com", "google-analytics.com", "doubleclick.net",
+    "apple.com/app", "play.google.com/intl", "policies.google.com", "support.google.com",
+    "miro.medium.com", "s.pinimg.com", "pinimg.com", "s.w.org",
+    "cdn2.unrealengine.com", "epicgames.com", "static-cdn.jtvnw.net",
+    "play-lh.googleusercontent.com", "media.tenor.com", "developer.android.com",
 )
+_IGNORED_LINK_EXTENSIONS = (
+    ".css", ".js", ".mjs", ".cjs", ".png", ".jpg", ".jpeg", ".gif",
+    ".svg", ".webp", ".ico", ".woff", ".woff2", ".ttf", ".eot", ".map",
+)
+_PLATFORM_BRAND_SLUGS = {
+    "artstationhq", "wordpress", "wordpressdotorg", "geeksforgeeks",
+    "pinterest", "tenor", "wattpad", "medium", "twitch", "twitchtracker",
+    "duolingo", "gravatar", "github", "gitlab",
+}
+
+
+def _is_useful_profile_link(lnk: str, source_host: str = "") -> bool:
+    """Filter out CDN assets, XML schemas, JS bundles, and platform-owned footer links."""
+    low = lnk.lower().strip()
+    if not low.startswith(("http://", "https://")):
+        return False
+    path_clean = low.split("?")[0].split("#")[0]
+    if path_clean.endswith(_IGNORED_LINK_EXTENSIONS):
+        return False
+    if any(ign in low for ign in _IGNORED_EXT_DOMAINS):
+        return False
+    parsed = urlparse(low)
+    host = parsed.netloc.lower()
+    if source_host and host == source_host.lower():
+        return False
+    # Filter platform-owned social accounts (e.g., instagram.com/artstationhq, x.com/WordPress)
+    slug = parsed.path.strip("/").split("/")[-1].lstrip("@") if parsed.path.strip("/") else ""
+    if slug in _PLATFORM_BRAND_SLUGS:
+        return False
+    return True
 
 
 def _strip_html(text: str) -> str:
@@ -197,10 +233,13 @@ async def _analyze_github_repo(owner: str, repo: str, client: httpx.AsyncClient)
                         if "noreply.github.com" not in em.lower() and not em.lower().endswith((".png", ".jpg", ".svg")):
                             emails.append(em.lower())
                     for u in re.findall(r"https?://[^\s\)\]>\"']+", ctxt):
-                        if not any(ign in u.lower() for ign in _IGNORED_EXT_DOMAINS):
-                            linked_urls.append(u.rstrip(".,;:"))
+                        clean_u = u.rstrip(".,;:")
+                        if _is_useful_profile_link(clean_u):
+                            linked_urls.append(clean_u)
                     for pkg_m in re.findall(r'(?:applicationId|package)\s*[=:]?\s*["\']([a-zA-Z0-9_]+(?:\.[a-zA-Z0-9_]+){2,})["\']', ctxt):
-                        linked_urls.append(f"https://play.google.com/store/apps/details?id={pkg_m}&hl=en")
+                        play_u = f"https://play.google.com/store/apps/details?id={pkg_m}&hl=en"
+                        linked_urls.append(play_u)
+                        info.setdefault("extra_fields", {})["android_package_id"] = pkg_m
 
         if emails:
             dedup_emails = list(dict.fromkeys(emails))
@@ -454,62 +493,208 @@ async def _analyze_wattpad(username: str, client: httpx.AsyncClient) -> dict[str
     return info
 
 
-async def _analyze_playstore(url: str, client: httpx.AsyncClient) -> dict[str, Any]:
-    """Extract developer contact email, website, app titles, and office address from Google Play Store pages."""
-    info: dict[str, Any] = {}
-    try:
-        r = await client.get(url, headers=BROWSER_HEADERS, follow_redirects=True, timeout=8.0)
-        if r.status_code != 200:
-            return info
-        html = r.text
+def _parse_playstore_app_html(html: str) -> dict[str, Any]:
+    """Parse Google Play Store app details HTML (App title, developer, About the developer, support email/phone/address/website)."""
+    import html as _html
+
+    out: dict[str, Any] = {}
+    extra: dict[str, Any] = {}
+
+    # 1. App title (<h1 ...><span ... itemprop="name">...</span></h1> or <title>)
+    title_m = re.search(r'<h1[^>]*>.*?<span[^>]*itemprop=["\']name["\'][^>]*>([^<]+)</span>', html, re.DOTALL | re.IGNORECASE)
+    if title_m:
+        out["app_name"] = _html.unescape(title_m.group(1).strip())
+        out["title"] = out["app_name"]
+
+    # 2. App description (meta or itemprop="description")
+    desc_m = re.search(r'<div[^>]*data-g-id=["\']description["\'][^>]*>(.*?)</div>', html, re.DOTALL | re.IGNORECASE)
+    if desc_m:
+        out["bio"] = _html.unescape(_strip_html(desc_m.group(1)))[:700]
+    else:
         parsed_meta = parse_html_metadata(html[:120_000])
         if isinstance(parsed_meta, dict):
-            if parsed_meta.get("title"):
-                info["title"] = parsed_meta["title"]
+            if parsed_meta.get("title") and not out.get("title"):
+                out["title"] = parsed_meta["title"]
             if parsed_meta.get("description"):
-                info["bio"] = parsed_meta["description"]
+                out["bio"] = parsed_meta["description"]
 
-        og_m = OG_IMAGE_PATTERN.search(html[:60_000])
-        if og_m:
-            info["avatar_url"] = og_m.group(1)
+    # 3. Images: og:image (icon) + screenshots
+    images: list[str] = []
+    og_m = OG_IMAGE_PATTERN.search(html[:60_000])
+    if og_m:
+        out["avatar_url"] = og_m.group(1)
+        images.append(og_m.group(1))
+    for img_m in re.findall(r'src=["\'](https://play-lh\.googleusercontent\.com/[^"\'>\s]+)["\']', html):
+        if img_m not in images:
+            images.append(img_m)
+    if images:
+        out["images"] = images[:8]
 
-        # Extract developer contact emails
-        emails = list(dict.fromkeys(MAILTO_PATTERN.findall(html)))
-        if not emails:
-            raw_emails = re.findall(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}', html)
-            emails = [e for e in dict.fromkeys(raw_emails) if not e.endswith((".png", ".jpg", ".webp", "google.com", "gstatic.com"))]
-        if emails:
-            info["email"] = emails[0]
-            info["contact_emails"] = emails[:3]
+    # 4. Developer Name & Developer Page URL
+    dev_link_m = re.search(
+        r'<a[^>]+href=["\'](/store/apps/(?:developer|dev)\?id=[^"\'>\s]+)["\'][^>]*>\s*<span[^>]*>([^<]+)</span>',
+        html,
+        re.IGNORECASE,
+    )
+    if dev_link_m:
+        dev_path, dev_name = dev_link_m.group(1), _html.unescape(dev_link_m.group(2).strip())
+        out["company"] = dev_name
+        extra["developer_name"] = dev_name
+        dev_full_url = f"https://play.google.com{dev_path}&hl=en" if "hl=" not in dev_path else f"https://play.google.com{dev_path}"
+        out.setdefault("linked_urls", []).append(dev_full_url)
 
-        # Extract Play Store "App support" / developer address & website from visible text
-        cleaned = _strip_html(SCRIPT_STYLE_STRIP.sub(" ", html))
-        addr_m = re.search(
-            r"(?:Address|Developer\s+address)\s*[:\-]?\s*([A-Za-z0-9 ,.\-/#]{10,160})",
+    # 5. "About the developer" block (Legal Name, Developer Email, Physical Office Address, Phone)
+    about_dev_m = re.search(
+        r'About the developer</div>\s*<div[^>]*class=["\'][^"\']*HhKIQc[^"\']*["\'][^>]*>(.*?)</div>\s*</div>\s*</div>\s*</section>',
+        html,
+        re.DOTALL | re.IGNORECASE,
+    )
+    if about_dev_m:
+        block = about_dev_m.group(1)
+        inner_divs = [_html.unescape(_strip_html(d)).strip() for d in re.findall(r'<div[^>]*>(.*?)</div>', block, re.DOTALL)]
+        inner_divs = [d for d in inner_divs if d]
+        addr_m = re.search(r'<div[^>]*class=["\'][^"\']*mHsyY[^"\']*["\'][^>]*>(.*?)</div>', block, re.DOTALL | re.IGNORECASE)
+        if addr_m:
+            office_addr = re.sub(r"\s*\n+\s*", ", ", _html.unescape(_strip_html(addr_m.group(1))).strip())
+            if office_addr:
+                out["location"] = office_addr
+                extra["office_address"] = office_addr
+        for part in inner_divs:
+            if "@" in part and "." in part:
+                out.setdefault("contact_emails", []).append(part.lower())
+                extra["developer_email"] = part.lower()
+            elif re.search(r"^\+?\d[\d\s\-().]{6,18}\d$", part):
+                out.setdefault("phone_numbers", []).append(part)
+                extra["developer_phone"] = part
+            elif part != out.get("location") and not out.get("name") and len(part) < 80:
+                out["name"] = part
+                extra["legal_name"] = part
+
+    # 6. App Support section: Support email, Support phone, Website, Privacy policy
+    supp_email_m = re.search(r'Support email</div>\s*<div[^>]*class=["\'][^"\']*pSEeg[^"\']*["\'][^>]*>([^<]+)</div>', html, re.IGNORECASE)
+    if supp_email_m:
+        se = _html.unescape(supp_email_m.group(1).strip()).lower()
+        if "@" in se:
+            out.setdefault("contact_emails", []).append(se)
+            extra["support_email"] = se
+
+    supp_phone_m = re.search(r'Support phone(?: number)?</div>\s*<div[^>]*class=["\'][^"\']*pSEeg[^"\']*["\'][^>]*>([^<]+)</div>', html, re.IGNORECASE)
+    if supp_phone_m:
+        sp = _html.unescape(supp_phone_m.group(1).strip())
+        if sp:
+            out.setdefault("phone_numbers", []).append(sp)
+            extra["support_phone"] = sp
+
+    # Fallback mailto / regex emails across page
+    for em in MAILTO_PATTERN.findall(html):
+        out.setdefault("contact_emails", []).append(em.lower())
+    for ph in TEL_PATTERN.findall(html):
+        out.setdefault("phone_numbers", []).append(ph.strip())
+
+    # Fallback address regex for non-standard Play Store layouts
+    cleaned = _strip_html(SCRIPT_STYLE_STRIP.sub(" ", html))
+    if not out.get("location"):
+        addr_fb = re.search(
+            r"(?:Address|Developer\s+address|About the developer)\s*[:\-]?\s*([A-Za-z0-9 ,.\-/#]{10,180})",
             cleaned,
             re.IGNORECASE,
         )
-        if addr_m:
-            info["location"] = addr_m.group(1).strip()
+        if addr_fb:
+            out["location"] = addr_fb.group(1).strip()
 
-        # Extract outbound developer website / privacy policy links
-        ext_links = [
-            lnk for lnk in re.findall(r'href=["\'](https?://[^"\'>\s]+)["\']', html)
-            if not any(d in lnk.lower() for d in ("play.google.com", "google.com", "gstatic.com", "ggpht.com", "youtube.com"))
-        ]
-        if ext_links:
-            info["linked_urls"] = list(dict.fromkeys(ext_links))[:6]
-            info["website"] = info["linked_urls"][0]
+    # 7. Support Website & Privacy Policy outbound links
+    for a_m in re.finditer(r'<a[^>]+href=["\'](https?://[^"\'>\s]+)["\'][^>]*>(.*?)</a>', html, re.DOTALL | re.IGNORECASE):
+        href, anchor_txt = a_m.group(1), _strip_html(a_m.group(2)).lower()
+        if any(d in href.lower() for d in ("play.google.com", "google.com", "gstatic.com", "ggpht.com", "youtube.com", "schema.org")):
+            continue
+        if "privacy" in anchor_txt:
+            extra["privacy_policy_url"] = href
+        elif "website" in anchor_txt or "visit" in anchor_txt or not out.get("website"):
+            out["website"] = href
+        out.setdefault("linked_urls", []).append(href)
 
-        if cleaned:
-            info["page_text_excerpt"] = cleaned[:2500]
+    # Deduplicate lists
+    if out.get("contact_emails"):
+        dedup_em = list(dict.fromkeys(e for e in out["contact_emails"] if not e.endswith((".png", ".jpg", ".webp", "google.com", "gstatic.com"))))
+        if dedup_em:
+            out["contact_emails"] = dedup_em[:6]
+            out["email"] = dedup_em[0]
+    if out.get("phone_numbers"):
+        out["phone_numbers"] = list(dict.fromkeys(out["phone_numbers"]))[:4]
+    if out.get("linked_urls"):
+        out["linked_urls"] = list(dict.fromkeys(out["linked_urls"]))[:8]
+    if extra:
+        out["extra_fields"] = extra
+    if cleaned:
+        out["page_text_excerpt"] = cleaned[:3000]
+    return out
+
+
+async def _analyze_playstore(url: str, client: httpx.AsyncClient) -> dict[str, Any]:
+    """Extract developer contact email, legal name, phone, website, app titles, and office address from Google Play Store pages."""
+    info: dict[str, Any] = {}
+    try:
+        r = await client.get(url, headers=BROWSER_HEADERS, follow_redirects=True, timeout=10.0)
+        if r.status_code != 200:
+            return info
+        html = r.text
+
+        if "/store/apps/details" in url:
+            info = _parse_playstore_app_html(html)
+        else:
+            # Developer page: collect listed apps & fetch top 2 apps for full developer contact details
+            parsed_meta = parse_html_metadata(html[:120_000])
+            if isinstance(parsed_meta, dict):
+                if parsed_meta.get("title"):
+                    info["title"] = parsed_meta["title"]
+                if parsed_meta.get("description"):
+                    info["bio"] = parsed_meta["description"]
+            og_m = OG_IMAGE_PATTERN.search(html[:60_000])
+            if og_m:
+                info["avatar_url"] = og_m.group(1)
+
+            app_ids = list(dict.fromkeys(re.findall(r"/store/apps/details\?id=([a-zA-Z0-9._]+)", html)))
+            app_urls = [f"https://play.google.com/store/apps/details?id={aid}&hl=en" for aid in app_ids[:4]]
+            if app_urls:
+                info["linked_urls"] = app_urls
+                info.setdefault("extra_fields", {})["published_apps"] = app_ids[:10]
+                # Fetch top 2 apps to harvest "About the developer" (legal name, email, office address, website)
+                app_resps = await asyncio.gather(
+                    *(client.get(au, headers=BROWSER_HEADERS, follow_redirects=True, timeout=8.0) for au in app_urls[:2]),
+                    return_exceptions=True,
+                )
+                for ar in app_resps:
+                    if isinstance(ar, httpx.Response) and ar.status_code == 200:
+                        app_info = _parse_playstore_app_html(ar.text)
+                        for k in ("name", "location", "email", "website", "company"):
+                            if app_info.get(k) and not info.get(k):
+                                info[k] = app_info[k]
+                        for k in ("contact_emails", "phone_numbers"):
+                            if app_info.get(k):
+                                info[k] = list(dict.fromkeys(info.get(k, []) + app_info[k]))
+                        if app_info.get("extra_fields"):
+                            info.setdefault("extra_fields", {}).update(app_info["extra_fields"])
+                        if app_info.get("linked_urls"):
+                            info["linked_urls"] = list(dict.fromkeys(info["linked_urls"] + app_info["linked_urls"]))[:10]
+            cleaned = _strip_html(SCRIPT_STYLE_STRIP.sub(" ", html))
+            if cleaned and not info.get("page_text_excerpt"):
+                info["page_text_excerpt"] = cleaned[:2500]
     except Exception:
         pass
     return info
 
 
+_EXTRA_HYDRATION_KEYS = {
+    "headline", "tagline", "pronouns", "education", "college", "university", "school",
+    "degree", "occupation", "role", "jobtitle", "job_title", "title", "skills",
+    "languages", "joined", "created_at", "member_since", "rank", "rating",
+    "reputation", "solved", "contributions", "github", "linkedin", "twitter",
+    "instagram", "youtube", "country", "state", "region", "phone", "support_email",
+}
+
+
 def _extract_hydration_fields(obj: Any, out: dict[str, Any], depth: int = 0) -> None:
-    """Recursively harvest profile fields from embedded Next.js / JSON hydration blobs."""
+    """Recursively harvest profile fields and open-ended extra attributes from JSON-LD / hydration blobs."""
     if depth > 7:
         return
     if isinstance(obj, dict):
@@ -521,16 +706,30 @@ def _extract_hydration_fields(obj: Any, out: dict[str, Any], depth: int = 0) -> 
                     out["bio"] = val[:600]
                 elif kl in ("name", "fullname", "displayname", "display_name") and not out.get("name"):
                     out["name"] = val[:120]
-                elif kl in ("location", "city", "country", "address") and not out.get("location"):
+                elif kl in ("location", "city", "country", "address", "streetaddress", "addresslocality") and not out.get("location"):
                     out["location"] = val[:160]
-                elif kl in ("company", "organization", "org") and not out.get("company"):
+                elif kl in ("company", "organization", "org", "worksfor") and not out.get("company"):
                     out["company"] = val[:120]
                 elif kl in ("website", "blog", "homepage", "website_url") and val.startswith("http") and not out.get("website"):
                     out["website"] = val
                 elif kl in ("email", "contact_email") and "@" in val and not out.get("email"):
                     out["email"] = val
-                elif kl in ("avatar", "avatar_url", "avatarurl", "profile_image") and val.startswith("http") and not out.get("avatar_url"):
-                    out["avatar_url"] = val
+                elif kl in ("telephone", "contact_phone", "support_phone") and len(val) >= 7:
+                    out.setdefault("phone_numbers", []).append(val[:40])
+                elif kl in ("avatar", "avatar_url", "avatarurl", "profile_image", "image") and val.startswith("http"):
+                    if not out.get("avatar_url"):
+                        out["avatar_url"] = val
+                    out.setdefault("images", []).append(val)
+                elif kl in ("jobtitle", "job_title") and not out.get("job_title"):
+                    out["job_title"] = val[:120]
+                elif kl in _EXTRA_HYDRATION_KEYS and len(val) <= 200:
+                    out.setdefault("extra_fields", {})[kl] = val
+            elif isinstance(v, (int, float)) and not isinstance(v, bool) and kl in _EXTRA_HYDRATION_KEYS:
+                out.setdefault("extra_fields", {})[kl] = v
+            elif isinstance(v, list) and kl in ("skills", "languages", "knowsabout") and v:
+                items = [str(x).strip() for x in v[:12] if isinstance(x, (str, int, float)) and str(x).strip()]
+                if items:
+                    out.setdefault("skills", []).extend(items)
             elif isinstance(v, (dict, list)):
                 _extract_hydration_fields(v, out, depth + 1)
     elif isinstance(obj, list):
@@ -592,44 +791,71 @@ async def _analyze_generic_html(url: str, client: httpx.AsyncClient) -> dict[str
                 except Exception:
                     pass
 
-            # og:image / twitter:image / avatar <img> & mailto contact emails
-            og_m = OG_IMAGE_PATTERN.search(html)
-            if og_m and not info.get("avatar_url"):
-                info["avatar_url"] = og_m.group(1)
-            else:
-                av_m = AVATAR_IMG_PATTERN.search(html)
-                if av_m and not info.get("avatar_url"):
-                    info["avatar_url"] = av_m.group(1)
+            # og:image / twitter:image / avatar <img> & profile images
+            images: list[str] = list(info.get("images") or [])
+            for og_m in OG_IMAGE_PATTERN.finditer(html):
+                img_u = og_m.group(1)
+                if not img_u.lower().split("?")[0].endswith((".svg", ".ico")) and img_u not in images:
+                    images.append(img_u)
+                    if not info.get("avatar_url"):
+                        info["avatar_url"] = img_u
+            for av_m in AVATAR_IMG_PATTERN.finditer(html):
+                img_u = av_m.group(1)
+                if not img_u.lower().split("?")[0].endswith((".svg", ".ico")) and img_u not in images:
+                    images.append(img_u)
+                    if not info.get("avatar_url"):
+                        info["avatar_url"] = img_u
+            if images:
+                info["images"] = images[:8]
 
-            mailto_emails = list(dict.fromkeys(MAILTO_PATTERN.findall(html)))
-            if mailto_emails:
-                info["email"] = mailto_emails[0]
-                info["contact_emails"] = mailto_emails[:3]
-
-            # Cleaned visible text excerpt (prioritize <main>/<article>, strip nav/header/footer/scripts)
+            # Strip scripts, styles, nav, header, footer, aside BEFORE extracting links/emails/phones/text
             main_chunks = MAIN_CONTENT_PATTERN.findall(html)
-            content_html = " ".join(main_chunks) if main_chunks else html
-            visible_text = _strip_html(SCRIPT_STYLE_STRIP.sub(" ", content_html))
-            if len(visible_text) > 80:
-                info["page_text_excerpt"] = visible_text[:4000]
+            raw_content_html = " ".join(main_chunks) if main_chunks else html
+            clean_content_html = SCRIPT_STYLE_STRIP.sub(" ", raw_content_html)
 
-            # rel="me", social links, and general outbound profile/website links
-            rel_links = REL_ME_PATTERN.findall(html)
-            social_links = SOCIAL_LINK_PATTERN.findall(html)
+            mailto_emails = list(dict.fromkeys(MAILTO_PATTERN.findall(clean_content_html)))
+            if not mailto_emails:
+                mailto_emails = [
+                    em.lower() for em in re.findall(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}', _strip_html(clean_content_html))
+                    if not em.lower().endswith((".png", ".jpg", ".webp", ".svg", "sentry.io", "example.com"))
+                ]
+            if mailto_emails:
+                dedup_emails = list(dict.fromkeys(e.lower() for e in mailto_emails))
+                info["email"] = dedup_emails[0]
+                info["contact_emails"] = dedup_emails[:5]
+
+            tel_phones = list(dict.fromkeys(p.strip() for p in TEL_PATTERN.findall(clean_content_html)))
+            if tel_phones:
+                info["phone_numbers"] = list(dict.fromkeys(info.get("phone_numbers", []) + tel_phones))[:4]
+
+            # Extract structured <dt>/<dd> key-value pairs into extra_fields
+            for dt_m in re.finditer(r'<dt[^>]*>(.*?)</dt>\s*<dd[^>]*>(.*?)</dd>', clean_content_html, re.DOTALL | re.IGNORECASE):
+                k_txt = _strip_html(dt_m.group(1)).strip(" :").lower().replace(" ", "_")[:40]
+                v_txt = _strip_html(dt_m.group(2)).strip()[:200]
+                if k_txt and v_txt and len(k_txt) >= 2:
+                    info.setdefault("extra_fields", {})[k_txt] = v_txt
+
+            visible_text = _strip_html(clean_content_html)
+            if len(visible_text) > 80:
+                info["page_text_excerpt"] = visible_text[:4500]
+
+            # rel="me", social links, and clean outbound links (ONLY from main/non-boilerplate HTML)
+            rel_links = REL_ME_PATTERN.findall(clean_content_html)
+            social_links = SOCIAL_LINK_PATTERN.findall(clean_content_html)
             ext_links = [
-                lnk for lnk in EXT_LINK_PATTERN.findall(html)
-                if not any(ign in lnk.lower() for ign in _IGNORED_EXT_DOMAINS)
-                and not lnk.lower().endswith((".css", ".js", ".png", ".jpg", ".jpeg", ".svg", ".ico", ".woff2"))
+                lnk for lnk in EXT_LINK_PATTERN.findall(clean_content_html)
+                if _is_useful_profile_link(lnk, host)
             ]
             all_links = list(dict.fromkeys(rel_links + social_links + ext_links))
-            clean_links = [lnk for lnk in all_links if urlparse(lnk).netloc.lower() != host][:10]
+            clean_links = [lnk for lnk in all_links if _is_useful_profile_link(lnk, host)][:10]
             if clean_links:
-                existing = info.get("linked_urls", [])
-                info["linked_urls"] = list(dict.fromkeys(existing + clean_links))
+                existing = [u for u in info.get("linked_urls", []) if _is_useful_profile_link(u, host)]
+                info["linked_urls"] = list(dict.fromkeys(existing + clean_links))[:10]
 
             # Opportunistically follow 1 high-value same-host subpage (/about, /stories, /projects, /contact)
+            all_same_host = EXT_LINK_PATTERN.findall(clean_content_html)
             sub_candidates = [
-                lnk for lnk in all_links
+                lnk for lnk in all_same_host
                 if urlparse(lnk).netloc.lower() == host
                 and any(seg in lnk.lower() for seg in ("/about", "/stories", "/projects", "/contact"))
                 and lnk.rstrip("/") != url.rstrip("/")
@@ -718,15 +944,35 @@ async def analyze_profile_hit(hit: Hit, client: httpx.AsyncClient) -> dict[str, 
     if info.get("email"):
         hit.metadata["email"] = info["email"]
         text_parts.append(f"Email: {info['email']}")
+    if info.get("contact_emails"):
+        hit.metadata["contact_emails"] = info["contact_emails"]
+    if info.get("phone_numbers"):
+        hit.metadata["phone_numbers"] = info["phone_numbers"]
+        hit.raw_data["phone_numbers"] = info["phone_numbers"]
+        text_parts.append("Phone: " + ", ".join(info["phone_numbers"]))
+    if info.get("job_title"):
+        hit.metadata["job_title"] = info["job_title"]
+        text_parts.append(f"Role: {info['job_title']}")
+    if info.get("skills"):
+        dedup_skills = list(dict.fromkeys(str(s) for s in info["skills"] if s))[:12]
+        hit.metadata["skills"] = dedup_skills
+        text_parts.append("Skills: " + ", ".join(dedup_skills))
     if info.get("followers") is not None:
         hit.metadata["followers"] = info["followers"]
     if info.get("karma") is not None:
         hit.metadata["karma"] = info["karma"]
     if info.get("linked_urls"):
         hit.metadata["linked_urls"] = info["linked_urls"]
-        text_parts.append("Links: " + " ".join(info["linked_urls"]))
     if info.get("avatar_url"):
         hit.metadata["avatar_url"] = info["avatar_url"]
+    if info.get("images"):
+        hit.metadata["images"] = info["images"]
+    if info.get("extra_fields"):
+        hit.metadata["extra_fields"] = info["extra_fields"]
+        for ek, ev in info["extra_fields"].items():
+            if ek not in hit.metadata and ev not in (None, "", []):
+                hit.metadata[ek] = ev
+            text_parts.append(f"{ek}: {ev}")
     if info.get("page_text_excerpt"):
         hit.raw_data["_page_text_excerpt"] = info["page_text_excerpt"]
 
@@ -780,10 +1026,13 @@ async def _llm_enrich_batch(hits: list[Hit], llm_client: Any, batch_size: int = 
 
     system = (
         "You are an OSINT profile extraction assistant. Given a JSON list of ML-compressed public profile pages "
-        "(with TF-IDF keywords and optional profile images), extract ONLY facts explicitly present for EACH profile URL. "
-        "Return valid JSON: {\"profiles\": {\"<url>\": {\"real_name\": str, \"office_or_location\": str, "
-        "\"contact_emails\": [str], \"projects_or_stories\": [str], \"organizations\": [str], "
-        "\"linked_urls\": [str], \"summary\": str}}}."
+        "(with TF-IDF keywords and optional profile images), extract ALL concrete facts explicitly present for EACH profile URL. "
+        "Do NOT invent or pad with generic site boilerplate. Do NOT restrict yourself to fixed fields—capture any extra "
+        "concrete personal, developer, education, app, or contact details in `additional_facts`. "
+        "Return valid JSON: {\"profiles\": {\"<url>\": {\"real_name\": str, \"aliases\": [str], \"office_or_location\": str, "
+        "\"contact_emails\": [str], \"phone_numbers\": [str], \"websites\": [str], \"job_title\": str, "
+        "\"organizations\": [str], \"skills_or_topics\": [str], \"projects_or_stories\": [str], "
+        "\"linked_urls\": [str], \"additional_facts\": {\"<field_name>\": \"<value>\"}, \"summary\": str}}}."
     )
 
     for idx in range(0, len(rich_hits), batch_size):
@@ -833,17 +1082,47 @@ async def _llm_enrich_batch(hits: list[Hit], llm_client: Any, batch_size: int = 
                 if extracted.get("office_or_location") and not h.metadata.get("location"):
                     h.metadata["location"] = str(extracted["office_or_location"])
                 if isinstance(extracted.get("contact_emails"), list):
-                    emails = [str(e) for e in extracted["contact_emails"] if "@" in str(e)]
-                    if emails and not h.metadata.get("email"):
-                        h.metadata["email"] = emails[0]
+                    emails = [str(e).lower() for e in extracted["contact_emails"] if "@" in str(e)]
+                    if emails:
+                        existing_em = list(h.metadata.get("contact_emails") or [])
+                        h.metadata["contact_emails"] = list(dict.fromkeys(existing_em + emails))[:6]
+                        if not h.metadata.get("email"):
+                            h.metadata["email"] = emails[0]
+                if isinstance(extracted.get("phone_numbers"), list) and extracted["phone_numbers"]:
+                    phones = [str(p).strip() for p in extracted["phone_numbers"] if str(p).strip()]
+                    if phones:
+                        existing_ph = list(h.metadata.get("phone_numbers") or [])
+                        h.metadata["phone_numbers"] = list(dict.fromkeys(existing_ph + phones))[:4]
+                if extracted.get("job_title") and not h.metadata.get("job_title"):
+                    h.metadata["job_title"] = str(extracted["job_title"])
+                if isinstance(extracted.get("aliases"), list) and extracted["aliases"]:
+                    h.metadata["aliases"] = [str(a) for a in extracted["aliases"][:6] if a]
+                if isinstance(extracted.get("skills_or_topics"), list) and extracted["skills_or_topics"]:
+                    existing_sk = list(h.metadata.get("skills") or [])
+                    h.metadata["skills"] = list(dict.fromkeys(existing_sk + [str(s) for s in extracted["skills_or_topics"][:10] if s]))[:12]
+                if isinstance(extracted.get("websites"), list) and extracted["websites"]:
+                    sites = [str(w) for w in extracted["websites"] if str(w).startswith("http")]
+                    if sites and not h.metadata.get("website"):
+                        h.metadata["website"] = sites[0]
                 if isinstance(extracted.get("projects_or_stories"), list) and extracted["projects_or_stories"]:
                     h.metadata["projects_or_stories"] = [str(p) for p in extracted["projects_or_stories"][:6]]
                 if isinstance(extracted.get("organizations"), list) and extracted["organizations"]:
                     h.metadata["organizations"] = [str(o) for o in extracted["organizations"][:5]]
                 if isinstance(extracted.get("linked_urls"), list) and extracted["linked_urls"]:
                     existing_links = h.metadata.get("linked_urls") or []
-                    new_links = [str(u) for u in extracted["linked_urls"] if str(u).startswith("http")]
+                    new_links = [str(u) for u in extracted["linked_urls"] if _is_useful_profile_link(str(u))]
                     h.metadata["linked_urls"] = list(dict.fromkeys(list(existing_links) + new_links))[:12]
+                if isinstance(extracted.get("additional_facts"), dict) and extracted["additional_facts"]:
+                    extra = dict(h.metadata.get("extra_fields") or {})
+                    for fk, fv in extracted["additional_facts"].items():
+                        if fv not in (None, "", [], {}):
+                            clean_k = re.sub(r"[^a-zA-Z0-9_]+", "_", str(fk).strip().lower()).strip("_")[:48]
+                            if clean_k:
+                                extra[clean_k] = fv
+                                if clean_k not in h.metadata:
+                                    h.metadata[clean_k] = fv
+                    if extra:
+                        h.metadata["extra_fields"] = extra
                 if extracted.get("summary"):
                     h.metadata["llm_summary"] = str(extracted["summary"])
                     existing_desc = h.raw_data.get("description", "")

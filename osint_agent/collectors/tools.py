@@ -2156,25 +2156,62 @@ async def collect_playstore_intel(entity: Entity, client: httpx.AsyncClient) -> 
         "Accept-Language": "en-US,en;q=0.9",
     }
 
-    dev_url = f"https://play.google.com/store/apps/developer?id={quote(query)}&hl=en"
-    try:
-        dev_resp = await client.get(dev_url, headers=headers, follow_redirects=True, timeout=8.0)
-        if dev_resp.status_code == 200 and "/store/apps/details?id=" in dev_resp.text:
-            seen_urls.add(dev_url)
-            hits.append(
-                Hit(
-                    target_entity_id=entity.id,
-                    discovered_type=EntityType.PROFILE,
-                    discovered_value=dev_url,
-                    relation="developer_on",
-                    source_tool="playstore_intel",
-                    is_trusted=True,
-                    raw_data={"site": "Google Play Store", "developer": query},
-                    metadata={"site": "Google Play Store", "url": dev_url, "name": query},
+    dev_urls = [
+        f"https://play.google.com/store/apps/developer?id={quote(query)}&hl=en",
+        f"https://play.google.com/store/search?q={quote(query)}&c=apps&hl=en",
+    ]
+    query_norm = re.sub(r"[^a-z0-9]", "", query.lower())
+
+    for idx, dev_url in enumerate(dev_urls):
+        try:
+            dev_resp = await client.get(dev_url, headers=headers, follow_redirects=True, timeout=8.0)
+            if dev_resp.status_code != 200:
+                continue
+            html = dev_resp.text
+            is_search = idx == 1
+
+            # Extract matching developer pages
+            dev_ids = list(dict.fromkeys(re.findall(r'/store/apps/(?:developer|dev)\?id=([^"&<>\\]+)', html)))
+            for dev_id in dev_ids[:5]:
+                from urllib.parse import unquote as _unquote
+                dev_clean = _unquote(dev_id)
+                if is_search and query_norm not in re.sub(r"[^a-z0-9]", "", dev_clean.lower()):
+                    continue
+                d_url = f"https://play.google.com/store/apps/developer?id={quote(dev_clean)}&hl=en"
+                if d_url not in seen_urls:
+                    seen_urls.add(d_url)
+                    hits.append(
+                        Hit(
+                            target_entity_id=entity.id,
+                            discovered_type=EntityType.PROFILE,
+                            discovered_value=d_url,
+                            relation="developer_on",
+                            source_tool="playstore_intel",
+                            is_trusted=True,
+                            raw_data={"site": "Google Play Store", "developer": dev_clean},
+                            metadata={"site": "Google Play Store", "url": d_url, "name": dev_clean},
+                        )
+                    )
+
+            if not is_search and "/store/apps/details?id=" in html and dev_url not in seen_urls:
+                seen_urls.add(dev_url)
+                hits.append(
+                    Hit(
+                        target_entity_id=entity.id,
+                        discovered_type=EntityType.PROFILE,
+                        discovered_value=dev_url,
+                        relation="developer_on",
+                        source_tool="playstore_intel",
+                        is_trusted=True,
+                        raw_data={"site": "Google Play Store", "developer": query},
+                        metadata={"site": "Google Play Store", "url": dev_url, "name": query},
+                    )
                 )
-            )
-            app_ids = list(dict.fromkeys(re.findall(r"/store/apps/details\?id=([a-zA-Z0-9._]+)", dev_resp.text)))
-            for app_id in app_ids[:4]:
+
+            app_ids = list(dict.fromkeys(re.findall(r"/store/apps/details\?id=([a-zA-Z0-9._]+)", html)))
+            for app_id in app_ids[:10]:
+                if is_search and query_norm not in re.sub(r"[^a-z0-9]", "", app_id.lower()):
+                    continue
                 app_url = f"https://play.google.com/store/apps/details?id={app_id}&hl=en"
                 if app_url not in seen_urls:
                     seen_urls.add(app_url)
@@ -2190,8 +2227,8 @@ async def collect_playstore_intel(entity: Entity, client: httpx.AsyncClient) -> 
                             metadata={"site": "Google Play Store", "url": app_url, "name": app_id},
                         )
                     )
-    except (httpx.HTTPError, httpx.TimeoutException) as exc:
-        logger.debug("Play Store developer lookup failed for %s: %s", query, exc)
+        except (httpx.HTTPError, httpx.TimeoutException) as exc:
+            logger.debug("Play Store lookup failed for %s (%s): %s", query, dev_url, exc)
 
     return hits
 

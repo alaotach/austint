@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 _SPACY_LOGGED = False
 _SPACY_NLP: Any | None = None
 
-# Social network, media, search, and URL shortener domains to filter out
+# Social network, media, search, CDN, schema, and URL shortener domains to filter out
 EXCLUDED_DOMAINS = {
     "twitter.com",
     "x.com",
@@ -35,17 +35,54 @@ EXCLUDED_DOMAINS = {
     "reddit.com",
     "tiktok.com",
     "medium.com",
+    "miro.medium.com",
     "google.com",
+    "support.google.com",
+    "play.google.com",
+    "googleusercontent.com",
+    "gstatic.com",
+    "googleapis.com",
     "wikipedia.org",
     "wikimedia.org",
     "gravatar.com",
     "t.me",
     "discord.gg",
     "pinterest.com",
+    "pinimg.com",
     "threads.net",
     "substack.com",
     "patreon.com",
+    "schemas.android.com",
+    "w3.org",
+    "purl.org",
+    "xmlns.com",
+    "wordpress.org",
+    "w.org",
+    "tenor.com",
+    "epicgames.com",
+    "unrealengine.com",
+    "artstation.com",
+    "geeksforgeeks.org",
+    "wattpad.com",
+    "duolingo.com",
+    "cloudflare.com",
+    "jsdelivr.net",
+    "unpkg.com",
+    "githubusercontent.com",
+    "bsky.app",
+    "mastodon.world",
 }
+
+_NON_DOMAIN_EXTENSIONS = {
+    "py", "js", "mjs", "cjs", "ts", "tsx", "jsx", "kt", "kts", "java",
+    "gradle", "json", "xml", "yaml", "yml", "toml", "md", "txt", "html",
+    "htm", "css", "scss", "png", "jpg", "jpeg", "gif", "svg", "webp",
+    "ico", "woff", "woff2", "ttf", "eot", "pdf", "zip", "tar", "gz",
+    "apk", "aab", "so", "dll", "exe", "sh", "lock", "log", "csv",
+    "sql", "db", "env", "properties", "pro", "plist", "pbxproj",
+}
+
+_ANDROID_PACKAGE_RE = re.compile(r"^(?:com|org|net|io|dev|app|in)\.[a-z0-9_]+(?:\.[a-z0-9_]+)+$")
 
 # Regex for forbidden sensitive items (phones, residential street addresses)
 PHONE_REGEX = re.compile(r"(?:\+?\d{1,3}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}")
@@ -111,14 +148,22 @@ def extract_entities(text: str) -> list[Entity]:
                 seen_ids.add(ent.id)
                 entities.append(ent)
 
-    # 2. Extract Domains (excluding social platforms and link shorteners)
+    # 2. Extract Domains (excluding social platforms, CDNs, filenames, and Android package IDs)
     for match in DOMAIN_REGEX.finditer(clean_text):
+        full_match = match.group(0).lower()
         raw_domain = match.group(1).lower().strip(".,;:?!'\"")
         # Ensure it has a valid TLD
         if "." not in raw_domain:
             continue
         # Strip trailing path if caught
         domain_val = raw_domain.split("/")[0]
+        tld = domain_val.rsplit(".", 1)[-1]
+        # Real TLDs are pure ASCII letters (2-15 chars) and not file extensions
+        if not tld.isalpha() or not (2 <= len(tld) <= 15) or tld in _NON_DOMAIN_EXTENSIONS:
+            continue
+        # Reject reverse-DNS Android/Java package names like com.alaotach.app when not an explicit URL
+        if not full_match.startswith(("http://", "https://")) and _ANDROID_PACKAGE_RE.match(domain_val):
+            continue
 
         if domain_val in EXCLUDED_DOMAINS or any(domain_val.endswith(f".{x}") for x in EXCLUDED_DOMAINS):
             continue

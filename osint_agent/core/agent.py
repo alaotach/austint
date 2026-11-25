@@ -173,6 +173,48 @@ class OSINTAgent:
                     # Deeply analyze discovered PROFILE hits concurrently (platform APIs + HTML/JSON-LD/links)
                     await analyze_profiles_batch(hits, client, max_profiles=40, concurrency=12)
 
+                    # Follow high-value linked profile/app URLs discovered inside scraped profiles (e.g. Play Store app from GitHub)
+                    _HIGH_VALUE_URL_PREFIXES = (
+                        "https://play.google.com/store/apps/",
+                        "https://www.linkedin.com/in/",
+                        "https://linkedin.com/in/",
+                        "https://www.wattpad.com/user/",
+                        "https://dev.to/",
+                        "https://huggingface.co/",
+                        "https://t.me/",
+                    )
+                    seen_hit_vals = {h.discovered_value.rstrip("/") for h in hits}
+                    followup_hits: list[Hit] = []
+                    for h in list(hits):
+                        for lurl in (h.metadata.get("linked_urls") or []):
+                            lurl_s = str(lurl).strip()
+                            if (
+                                lurl_s.startswith(_HIGH_VALUE_URL_PREFIXES)
+                                and lurl_s.rstrip("/") not in seen_hit_vals
+                                and f"profile:{lurl_s}" not in graph
+                            ):
+                                seen_hit_vals.add(lurl_s.rstrip("/"))
+                                site_name = "Google Play Store" if "play.google.com" in lurl_s else lurl_s.split("/")[2]
+                                followup_hits.append(
+                                    Hit(
+                                        target_entity_id=current_entity.id,
+                                        discovered_type=EntityType.PROFILE,
+                                        discovered_value=lurl_s,
+                                        relation="linked_profile",
+                                        source_tool=h.source_tool,
+                                        is_trusted=True,
+                                        raw_data={"site": site_name, "discovered_via": h.discovered_value},
+                                        metadata={"site": site_name, "url": lurl_s},
+                                    )
+                                )
+                                if len(followup_hits) >= 8:
+                                    break
+                        if len(followup_hits) >= 8:
+                            break
+                    if followup_hits:
+                        await analyze_profiles_batch(followup_hits, client, max_profiles=8, concurrency=6)
+                        hits.extend(followup_hits)
+
                     for hit in hits:
                         # 2. Score candidate hit using resolver
                         score = self.resolver.score(current_entity, hit)
@@ -257,15 +299,24 @@ class OSINTAgent:
                                 ),
                             )
 
-                        # 4. Extract entities from confirmed hit's text
+                        # 4. Extract entities from confirmed hit's text AND structured metadata
                         hit_text = (
                             hit.raw_data.get("description")
                             or hit.metadata.get("bio")
                             or hit.metadata.get("description")
                             or ""
                         )
-                        if hit_text:
-                            extracted_leads = extract_entities(hit_text)
+                        extra_lead_chunks: list[str] = [hit_text] if hit_text else []
+                        for em in (hit.metadata.get("contact_emails") or []):
+                            if isinstance(em, str) and "@" in em:
+                                extra_lead_chunks.append(em)
+                        if isinstance(hit.metadata.get("email"), str) and "@" in hit.metadata["email"]:
+                            extra_lead_chunks.append(hit.metadata["email"])
+                        if isinstance(hit.metadata.get("website"), str) and hit.metadata["website"].startswith("http"):
+                            extra_lead_chunks.append(hit.metadata["website"])
+                        combined_lead_text = " ".join(extra_lead_chunks).strip()
+                        if combined_lead_text:
+                            extracted_leads = extract_entities(combined_lead_text)
                             for lead in extracted_leads:
                                 lead_conf = round(child_entity.confidence * scope.confidence_decay, 4)
                                 if lead_conf >= scope.min_confidence:

@@ -1536,3 +1536,144 @@ async def test_openrouter_client_reasoning_exhaustion_bumps_max_tokens() -> None
 
     assert res["extracted"] == "yes"
     assert seen_max_tokens == [8192, 16384]
+
+
+# ---------------------------------------------------------------------------
+# Deep scraping, Play Store About-Developer, open-ended fields, and noise filtering tests
+# ---------------------------------------------------------------------------
+
+
+def test_extractor_ignores_android_packages_and_file_extensions() -> None:
+    """extract_entities must not emit fake domain nodes for Android package IDs, filenames, or CDN hosts."""
+    from osint_agent.collectors.extractor import extract_entities
+
+    text = (
+        "Built Android app com.alaotach.eli5 in build.gradle and config.py. "
+        "Assets on s.pinimg.com, miro.medium.com, schemas.android.com. "
+        "Official website: https://eryzalabs.cloud and contact eryzalabs@gmail.com"
+    )
+    entities = extract_entities(text)
+    domains = {e.value for e in entities if e.entity_type == EntityType.DOMAIN}
+    emails = {e.value for e in entities if e.entity_type == EntityType.EMAIL}
+
+    assert "eryzalabs.cloud" in domains
+    assert "com.alaotach.eli5" not in domains
+    assert "build.gradle" not in domains
+    assert "config.py" not in domains
+    assert "s.pinimg.com" not in domains
+    assert "schemas.android.com" not in domains
+    assert "eryzalabs@gmail.com" in emails
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_profile_analyzer_playstore_about_developer_and_support() -> None:
+    """_analyze_playstore should extract About the developer (name, email, office address, phone) and support links."""
+    from osint_agent.collectors.profile_analyzer import analyze_profile_hit
+
+    app_url = "https://play.google.com/store/apps/details?id=com.alaotach.eli5&hl=en"
+    sample_html = """
+    <html>
+      <head>
+        <meta property="og:image" content="https://play-lh.googleusercontent.com/icon123=w240-h480-rw" />
+      </head>
+      <body>
+        <h1><span class="AfwdI" itemprop="name">ELI5: Explain Text Anywhere</span></h1>
+        <div class="Vbfug auoIOc"><a href="/store/apps/developer?id=AlAoTach+Inc."><span>AlAoTach Inc.</span></a></div>
+        <div data-g-id="description">Explain any text on your screen instantly.</div>
+        <a href="https://eryzalabs.cloud">Website</a>
+        <a href="https://www.termsfeed.com/live/privacy-123">Privacy policy</a>
+        <div class="xFVDSb">Support email</div><div class="pSEeg">eryzalabs@gmail.com</div>
+        <div class="xFVDSb">Support phone</div><div class="pSEeg">+91-9876543210</div>
+        <section>
+          <div class="Bne0R ">About the developer</div>
+          <div class="HhKIQc">
+            <div> Aryan Mishra </div>
+            <div> aryanmi2001@gmail.com </div>
+            <div class="mHsyY"> Vard No.7 Koraon
+Koraon, Uttar Pradesh 212306
+India </div>
+          </div>
+        </div></div></div></section>
+      </body>
+    </html>
+    """
+    respx.get(app_url).mock(return_value=httpx.Response(200, text=sample_html))
+
+    hit = Hit(
+        target_entity_id="username:alaotach",
+        discovered_type=EntityType.PROFILE,
+        discovered_value=app_url,
+        relation="published_app",
+        source_tool="playstore_intel",
+        metadata={"site": "Google Play Store", "url": app_url},
+    )
+    async with httpx.AsyncClient() as client:
+        info = await analyze_profile_hit(hit, client)
+
+    assert hit.metadata["name"] == "Aryan Mishra"
+    assert hit.metadata["company"] == "AlAoTach Inc."
+    assert "Koraon, Uttar Pradesh 212306" in hit.metadata["location"]
+    assert "eryzalabs@gmail.com" in hit.metadata["contact_emails"]
+    assert "aryanmi2001@gmail.com" in hit.metadata["contact_emails"]
+    assert "+91-9876543210" in hit.metadata["phone_numbers"]
+    assert hit.metadata["website"] == "https://eryzalabs.cloud"
+    assert hit.metadata["extra_fields"]["privacy_policy_url"] == "https://www.termsfeed.com/live/privacy-123"
+    assert hit.metadata["extra_fields"]["developer_name"] == "AlAoTach Inc."
+    assert info["app_name"] == "ELI5: Explain Text Anywhere"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_profile_analyzer_generic_html_strips_boilerplate_and_extracts_extra_fields() -> None:
+    """_analyze_generic_html should strip nav/footer/script junk links and extract <dt>/<dd>, tel:, and images."""
+    from osint_agent.collectors.profile_analyzer import analyze_profile_hit
+
+    url = "https://example-portfolio.dev/aryan"
+    html = """
+    <html>
+      <head>
+        <meta property="og:image" content="https://example-portfolio.dev/photo.jpg" />
+        <script src="https://s.pinimg.com/webapp/polyfills.mjs"></script>
+      </head>
+      <body>
+        <nav><a href="https://instagram.com/artstationhq">Platform IG</a></nav>
+        <main>
+          <h1>Aryan Mishra</h1>
+          <p>AI Engineer building ELI5.</p>
+          <dl>
+            <dt>University</dt><dd>IIT Delhi</dd>
+            <dt>Role</dt><dd>Founder at EryzaLabs</dd>
+          </dl>
+          <a href="mailto:hello@eryzalabs.cloud">Email</a>
+          <a href="tel:+919988776655">Call</a>
+          <a href="https://github.com/alaotach">GitHub</a>
+        </main>
+        <footer><a href="https://www.epicgames.com/site/de/impressum">Impressum</a></footer>
+      </body>
+    </html>
+    """
+    respx.get("https://example-portfolio.dev/robots.txt").mock(return_value=httpx.Response(404))
+    respx.get(url).mock(
+        return_value=httpx.Response(200, headers={"content-type": "text/html"}, text=html)
+    )
+
+    hit = Hit(
+        target_entity_id="username:alaotach",
+        discovered_type=EntityType.PROFILE,
+        discovered_value=url,
+        relation="account_on",
+        source_tool="maigret",
+        metadata={"site": "Portfolio", "url": url},
+    )
+    async with httpx.AsyncClient() as client:
+        await analyze_profile_hit(hit, client)
+
+    links = hit.metadata.get("linked_urls", [])
+    assert "https://github.com/alaotach" in links
+    assert not any("artstationhq" in u or "epicgames.com" in u or "polyfills.mjs" in u for u in links)
+    assert "hello@eryzalabs.cloud" in hit.metadata.get("contact_emails", [])
+    assert "+919988776655" in hit.metadata.get("phone_numbers", [])
+    assert hit.metadata["extra_fields"]["university"] == "IIT Delhi"
+    assert hit.metadata["extra_fields"]["role"] == "Founder at EryzaLabs"
+    assert "https://example-portfolio.dev/photo.jpg" in hit.metadata.get("images", [])
