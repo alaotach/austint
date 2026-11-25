@@ -334,7 +334,7 @@ class OpenRouterClient(BaseClient):
         model: str | None = None,
         base_url: str | None = None,
         call_budget: int = 20,
-        timeout: float = 25.0,
+        timeout: float = 45.0,
     ) -> None:
         super().__init__(call_budget=call_budget, timeout=timeout)
         _load_dotenv()
@@ -363,24 +363,37 @@ class OpenRouterClient(BaseClient):
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
         }
-        if image_urls:
+
+        # Filter out image formats that vision providers commonly reject with 400
+        valid_images = [
+            u for u in (image_urls or [])[:3]
+            if isinstance(u, str)
+            and u.startswith(("http://", "https://"))
+            and not u.lower().split("?")[0].endswith((".svg", ".ico"))
+        ]
+
+        if valid_images:
             user_content: Any = [{"type": "text", "text": user}]
-            for img_url in image_urls[:3]:
-                if isinstance(img_url, str) and img_url.startswith("http"):
-                    user_content.append({"type": "image_url", "image_url": {"url": img_url}})
+            for img_url in valid_images:
+                user_content.append({"type": "image_url", "image_url": {"url": img_url}})
         else:
             user_content = user
 
-        payload = {
+        # Reasoning models on openrouter/free (e.g. ernie-5.5, nemotron-reasoning, deepseek-r1)
+        # consume output tokens in `message.reasoning` before emitting `message.content`.
+        # Ensure at least 4096 tokens so reasoning doesn't starve the JSON output.
+        effective_max_tokens = max(max_tokens, 4096)
+
+        payload: dict[str, Any] = {
             "model": self.model,
-            "max_tokens": max_tokens,
+            "max_tokens": effective_max_tokens,
             "messages": [
                 {"role": "system", "content": system},
                 {"role": "user", "content": user_content},
             ],
         }
 
-        # Retry schedule: (delay_before_attempt_seconds, is_this_a_retry)
+        # Retry schedule: (delay_before_attempt_seconds)
         # Attempts: 0s → 3s → 8s  (3 total attempts)
         _RETRY_DELAYS = [0, 3, 8]
         _MAX_ATTEMPTS = len(_RETRY_DELAYS)
@@ -396,13 +409,13 @@ class OpenRouterClient(BaseClient):
                     # 429 rate-limit: respect Retry-After header or back off longer
                     if resp.status_code == 429:
                         retry_after = int(resp.headers.get("Retry-After", 0))
-                        wait = max(retry_after, 10 + attempt * 5)  # min 10s, grows per attempt
+                        wait = max(retry_after, 10 + attempt * 5)
                         logger.warning(
                             "OpenRouter 429 rate-limited (attempt %d/%d). Waiting %ds before retry.",
                             attempt + 1, _MAX_ATTEMPTS, wait,
                         )
                         last_exc = httpx.HTTPStatusError(
-                            f"429 Too Many Requests",
+                            "429 Too Many Requests",
                             request=resp.request,
                             response=resp,
                         )
@@ -410,19 +423,46 @@ class OpenRouterClient(BaseClient):
                             time.sleep(wait)
                         continue
 
-                    # Other HTTP errors
+                    # 400 Bad Request: often caused by an unreachable/unsupported image_url
+                    # or a text-only model selected by the router; strip images and fall back.
+                    if resp.status_code == 400 and isinstance(payload["messages"][1]["content"], list):
+                        logger.warning(
+                            "OpenRouter 400 with multimodal images (attempt %d/%d): %s — falling back to text-only",
+                            attempt + 1, _MAX_ATTEMPTS, resp.text[:200],
+                        )
+                        payload["messages"][1]["content"] = user
+                        last_exc = httpx.HTTPStatusError(
+                            f"400 Bad Request (multimodal fallback): {resp.text[:150]}",
+                            request=resp.request,
+                            response=resp,
+                        )
+                        continue
+
                     resp.raise_for_status()
 
                     data = resp.json()
                     choices = data.get("choices") or []
                     raw_text = ""
+                    finish_reason = ""
+                    has_reasoning = False
                     if choices:
+                        finish_reason = str(choices[0].get("finish_reason") or "")
                         msg = choices[0].get("message") or {}
                         raw_text = str(msg.get("content") or "")
+                        has_reasoning = bool(msg.get("reasoning") or msg.get("reasoning_content"))
 
-                    # Detect empty body early with a clear message
+                    # Detect empty content body early (often reasoning model hit max_tokens)
                     if not raw_text.strip():
-                        raise ValueError("LLM returned empty content body — model may have refused or timed out")
+                        if finish_reason == "length" or has_reasoning:
+                            payload["max_tokens"] = min(int(payload["max_tokens"]) * 2, 8192)
+                            raise ValueError(
+                                f"LLM returned empty content (model={data.get('model')}, "
+                                f"finish_reason={finish_reason!r}, reasoning_exhausted={has_reasoning}); "
+                                f"bumping max_tokens to {payload['max_tokens']}"
+                            )
+                        raise ValueError(
+                            f"LLM returned empty content body (model={data.get('model')}, finish_reason={finish_reason!r})"
+                        )
 
                     usage = data.get("usage") or {}
                     token_count = int(

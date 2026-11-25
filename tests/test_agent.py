@@ -1448,3 +1448,91 @@ async def test_openrouter_client_truncated_json_repaired() -> None:
     res = client.complete_json(system="sys", user="usr", max_tokens=100)
     assert res["real_name"] == "Eve"
     assert res["location"] == "London"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_openrouter_client_400_multimodal_falls_back_to_text() -> None:
+    """OpenRouterClient should strip image_urls and retry as text-only if 400 Bad Request occurs."""
+    from unittest.mock import patch
+    from osint_agent.llm.client import OpenRouterClient
+
+    seen_contents: list = []
+
+    def side_effect(request):
+        body = json.loads(request.content.decode("utf-8"))
+        seen_contents.append(body["messages"][1]["content"])
+        if isinstance(body["messages"][1]["content"], list):
+            return httpx.Response(400, json={"error": {"message": "Invalid image URL"}})
+        return httpx.Response(
+            200,
+            json={
+                "choices": [{"finish_reason": "stop", "message": {"content": '{"ok": true}'}}],
+                "usage": {"total_tokens": 15},
+            },
+        )
+
+    respx.post("https://ai.hackclub.com/proxy/v1/chat/completions").mock(side_effect=side_effect)
+
+    client = OpenRouterClient(api_key="test-key", call_budget=5)
+    with patch("osint_agent.llm.client.time.sleep"):
+        res = client.complete_multimodal_json(
+            system="sys",
+            user="usr",
+            image_urls=["https://example.com/avatar.png", "https://example.com/icon.svg"],
+            max_tokens=1200,
+        )
+
+    assert res["ok"] is True
+    assert len(seen_contents) == 2
+    # First attempt sent only .png (filtered out .svg), second fell back to plain string
+    assert isinstance(seen_contents[0], list)
+    assert len(seen_contents[0]) == 2  # text + 1 valid png
+    assert seen_contents[1] == "usr"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_openrouter_client_reasoning_exhaustion_bumps_max_tokens() -> None:
+    """OpenRouterClient should bump max_tokens and retry when reasoning model hits length with empty content."""
+    from unittest.mock import patch
+    from osint_agent.llm.client import OpenRouterClient
+
+    seen_max_tokens: list[int] = []
+
+    def side_effect(request):
+        body = json.loads(request.content.decode("utf-8"))
+        seen_max_tokens.append(body["max_tokens"])
+        if len(seen_max_tokens) == 1:
+            return httpx.Response(
+                200,
+                json={
+                    "model": "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
+                    "choices": [
+                        {
+                            "finish_reason": "length",
+                            "message": {
+                                "content": "",
+                                "reasoning": "Thinking step 1... cut off before answer",
+                            },
+                        }
+                    ],
+                    "usage": {"total_tokens": 4096},
+                },
+            )
+        return httpx.Response(
+            200,
+            json={
+                "choices": [{"finish_reason": "stop", "message": {"content": '{"extracted": "yes"}'}}],
+                "usage": {"total_tokens": 5000},
+            },
+        )
+
+    respx.post("https://ai.hackclub.com/proxy/v1/chat/completions").mock(side_effect=side_effect)
+
+    client = OpenRouterClient(api_key="test-key", call_budget=5)
+    with patch("osint_agent.llm.client.time.sleep"):
+        res = client.complete_json(system="sys", user="usr", max_tokens=1200)
+
+    assert res["extracted"] == "yes"
+    assert seen_max_tokens == [4096, 8192]
