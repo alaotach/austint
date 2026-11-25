@@ -96,11 +96,12 @@ async def _analyze_github_repo(owner: str, repo: str, client: httpx.AsyncClient)
     base = f"https://api.github.com/repos/{owner}/{repo}"
 
     try:
-        repo_r, readme_r, commits_r, contents_r = await asyncio.gather(
+        repo_r, readme_r, commits_r, contents_r, tree_r = await asyncio.gather(
             client.get(base, headers=headers, timeout=6.0),
             client.get(f"{base}/readme", headers={**headers, "Accept": "application/vnd.github.raw+json"}, timeout=6.0),
             client.get(f"{base}/commits?per_page=15", headers=headers, timeout=6.0),
             client.get(f"{base}/contents", headers=headers, timeout=6.0),
+            client.get(f"{base}/git/trees/HEAD?recursive=1", headers=headers, timeout=6.0),
             return_exceptions=True,
         )
 
@@ -147,30 +148,59 @@ async def _analyze_github_repo(owner: str, repo: str, client: httpx.AsyncClient)
                 if em and "@" in em and "noreply.github.com" not in em:
                     emails.append(em)
 
-        # Inspect key manifest/domain files (CNAME, package.json, pyproject.toml, FUNDING.yml)
+        # Inspect key manifest/domain files + recursive source code tree via raw.githubusercontent.com
+        code_targets: list[str] = []
+        seen_paths: set[str] = set()
+
         if isinstance(contents_r, httpx.Response) and contents_r.status_code == 200 and isinstance(contents_r.json(), list):
             interesting = {"cname", "package.json", "pyproject.toml", "setup.cfg", "cargo.toml"}
-            targets = [
-                item.get("download_url")
-                for item in contents_r.json()
-                if isinstance(item, dict)
-                and str(item.get("name", "")).lower() in interesting
-                and item.get("download_url")
-            ][:2]
-            if targets:
-                manifest_resps = await asyncio.gather(
-                    *(client.get(u, timeout=4.0) for u in targets),
-                    return_exceptions=True,
-                )
-                for mr in manifest_resps:
-                    if isinstance(mr, httpx.Response) and mr.status_code == 200:
-                        mtxt = mr.text[:3000]
-                        excerpt_parts.append(mtxt)
-                        for em in re.findall(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}", mtxt):
-                            if "noreply.github.com" not in em.lower():
-                                emails.append(em.lower())
-                        for u in re.findall(r"https?://[^\s\)\]>\"']+", mtxt):
+            for item in contents_r.json():
+                if (
+                    isinstance(item, dict)
+                    and str(item.get("name", "")).lower() in interesting
+                    and item.get("download_url")
+                ):
+                    code_targets.append(str(item["download_url"]))
+                    seen_paths.add(str(item.get("path") or item.get("name") or "").lower())
+
+        _CODE_EXTS = (".py", ".js", ".ts", ".tsx", ".jsx", ".html", ".json", ".yaml", ".yml", ".toml", ".gradle", ".xml", ".md")
+        _HIGH_SIGNAL_PATH_RE = re.compile(
+            r"(?:cname|funding\.yml|package\.json|pyproject\.toml|androidmanifest\.xml|build\.gradle|pubspec\.yaml|app\.json|"
+            r"(?:^|/)(?:config|constants|about|contact|footer|author|profile|settings|main|app|index)\.[^/]+$)",
+            re.IGNORECASE,
+        )
+        if isinstance(tree_r, httpx.Response) and tree_r.status_code == 200:
+            tree_items = tree_r.json().get("tree") or []
+            tree_paths = [str(it.get("path") or "") for it in tree_items if isinstance(it, dict) and it.get("type") == "blob"]
+            if tree_paths:
+                excerpt_parts.append("Files: " + ", ".join(tree_paths[:25]))
+            for p in tree_paths:
+                pl = p.lower()
+                if pl in seen_paths or "node_modules/" in pl or "venv/" in pl or ".git/" in pl:
+                    continue
+                if pl.endswith(_CODE_EXTS) and _HIGH_SIGNAL_PATH_RE.search(pl):
+                    seen_paths.add(pl)
+                    code_targets.append(f"https://raw.githubusercontent.com/{owner}/{repo}/HEAD/{p}")
+                    if len(code_targets) >= 6:
+                        break
+
+        if code_targets:
+            code_resps = await asyncio.gather(
+                *(client.get(u, timeout=4.0) for u in code_targets[:6]),
+                return_exceptions=True,
+            )
+            for cr in code_resps:
+                if isinstance(cr, httpx.Response) and cr.status_code == 200:
+                    ctxt = cr.text[:3000]
+                    excerpt_parts.append(ctxt)
+                    for em in re.findall(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}", ctxt):
+                        if "noreply.github.com" not in em.lower() and not em.lower().endswith((".png", ".jpg", ".svg")):
+                            emails.append(em.lower())
+                    for u in re.findall(r"https?://[^\s\)\]>\"']+", ctxt):
+                        if not any(ign in u.lower() for ign in _IGNORED_EXT_DOMAINS):
                             linked_urls.append(u.rstrip(".,;:"))
+                    for pkg_m in re.findall(r'(?:applicationId|package)\s*[=:]?\s*["\']([a-zA-Z0-9_]+(?:\.[a-zA-Z0-9_]+){2,})["\']', ctxt):
+                        linked_urls.append(f"https://play.google.com/store/apps/details?id={pkg_m}&hl=en")
 
         if emails:
             dedup_emails = list(dict.fromkeys(emails))

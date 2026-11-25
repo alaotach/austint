@@ -1028,6 +1028,23 @@ async def test_profile_analyzer_github_repo_deep_scrape() -> None:
     respx.get("https://api.github.com/repos/alaotach/eli-new/contents").mock(
         return_value=httpx.Response(200, json=[])
     )
+    respx.get("https://api.github.com/repos/alaotach/eli-new/git/trees/HEAD?recursive=1").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "tree": [
+                    {"path": "src/config.py", "type": "blob"},
+                    {"path": "app/build.gradle", "type": "blob"},
+                ]
+            },
+        )
+    )
+    respx.get("https://raw.githubusercontent.com/alaotach/eli-new/HEAD/src/config.py").mock(
+        return_value=httpx.Response(200, text='SUPPORT_EMAIL = "code@eli.example.dev"\nAPI_BASE = "https://api.eli.example.dev"\n')
+    )
+    respx.get("https://raw.githubusercontent.com/alaotach/eli-new/HEAD/app/build.gradle").mock(
+        return_value=httpx.Response(200, text='defaultConfig { applicationId "com.alaotach.elinew" }\n')
+    )
 
     repo_hit = Hit(
         target_entity_id="username:alaotach",
@@ -1042,5 +1059,8 @@ async def test_profile_analyzer_github_repo_deep_scrape() -> None:
 
     assert info["website"] == "https://eli.example.dev"
     assert repo_hit.metadata["email"] == "team@eli.example.dev"
+    assert "code@eli.example.dev" in info.get("contact_emails", [])
     assert "https://docs.eli.example.dev" in repo_hit.metadata["linked_urls"]
+    assert "https://api.eli.example.dev" in repo_hit.metadata["linked_urls"]
+    assert "https://play.google.com/store/apps/details?id=com.alaotach.elinew&hl=en" in repo_hit.metadata["linked_urls"]
     assert repo_hit.metadata.get("ml_keywords")
