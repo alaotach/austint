@@ -41,12 +41,24 @@ JSON_LD_PATTERN = re.compile(
     re.DOTALL | re.IGNORECASE,
 )
 HTML_TAG_STRIP = re.compile(r"<[^>]+>")
-SCRIPT_STYLE_STRIP = re.compile(r"<(script|style|noscript|svg)[^>]*>.*?</\1>", re.DOTALL | re.IGNORECASE)
+SCRIPT_STYLE_STRIP = re.compile(r"<(script|style|noscript|svg|nav|header|footer|aside)[^>]*>.*?</\1>", re.DOTALL | re.IGNORECASE)
+MAIN_CONTENT_PATTERN = re.compile(r"<(?:main|article)[^>]*>(.*?)</(?:main|article)>", re.DOTALL | re.IGNORECASE)
+NEXT_DATA_PATTERN = re.compile(r'<script[^>]+id=["\']__NEXT_DATA__["\'][^>]*>(.*?)</script>', re.DOTALL | re.IGNORECASE)
 OG_IMAGE_PATTERN = re.compile(
     r'<meta[^>]+(?:property|name)=["\'](?:og:image|twitter:image)["\'][^>]+content=["\'](https?://[^"\'>\s]+)["\']',
     re.IGNORECASE,
 )
+AVATAR_IMG_PATTERN = re.compile(
+    r'<img[^>]+(?:class|alt|id)=["\'][^"\']*(?:avatar|profile|user)[^"\']*["\'][^>]+src=["\'](https?://[^"\'>\s]+)["\']',
+    re.IGNORECASE,
+)
 MAILTO_PATTERN = re.compile(r'mailto:([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})', re.IGNORECASE)
+EXT_LINK_PATTERN = re.compile(r'href=["\'](https?://[^"\'>\s]+)["\']', re.IGNORECASE)
+_IGNORED_EXT_DOMAINS = (
+    "w3.org", "schema.org", "fonts.googleapis.com", "fonts.gstatic.com",
+    "cdnjs.cloudflare.com", "googletagmanager.com", "google-analytics.com",
+    "apple.com/app", "play.google.com/intl", "policies.google.com",
+)
 
 
 def _strip_html(text: str) -> str:
@@ -356,8 +368,38 @@ async def _analyze_playstore(url: str, client: httpx.AsyncClient) -> dict[str, A
     return info
 
 
+def _extract_hydration_fields(obj: Any, out: dict[str, Any], depth: int = 0) -> None:
+    """Recursively harvest profile fields from embedded Next.js / JSON hydration blobs."""
+    if depth > 7:
+        return
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            kl = str(k).lower()
+            if isinstance(v, str) and v.strip():
+                val = v.strip()
+                if kl in ("bio", "about", "aboutme", "description", "summary") and not out.get("bio"):
+                    out["bio"] = val[:600]
+                elif kl in ("name", "fullname", "displayname", "display_name") and not out.get("name"):
+                    out["name"] = val[:120]
+                elif kl in ("location", "city", "country", "address") and not out.get("location"):
+                    out["location"] = val[:160]
+                elif kl in ("company", "organization", "org") and not out.get("company"):
+                    out["company"] = val[:120]
+                elif kl in ("website", "blog", "homepage", "website_url") and val.startswith("http") and not out.get("website"):
+                    out["website"] = val
+                elif kl in ("email", "contact_email") and "@" in val and not out.get("email"):
+                    out["email"] = val
+                elif kl in ("avatar", "avatar_url", "avatarurl", "profile_image") and val.startswith("http") and not out.get("avatar_url"):
+                    out["avatar_url"] = val
+            elif isinstance(v, (dict, list)):
+                _extract_hydration_fields(v, out, depth + 1)
+    elif isinstance(obj, list):
+        for item in obj[:25]:
+            _extract_hydration_fields(item, out, depth + 1)
+
+
 async def _analyze_generic_html(url: str, client: httpx.AsyncClient) -> dict[str, Any]:
-    """Extract OpenGraph metadata, JSON-LD person fields, and rel=me/social links."""
+    """Extract OpenGraph metadata, JSON-LD, hydration JSON, images, emails, links, and cleaned page text."""
     info: dict[str, Any] = {}
     parsed = urlparse(url)
     host = parsed.netloc.lower()
@@ -374,11 +416,10 @@ async def _analyze_generic_html(url: str, client: httpx.AsyncClient) -> dict[str
     elif isinstance(meta, str) and meta:
         info["bio"] = meta
 
-    # Also attempt lightweight HTML link & JSON-LD extraction if not already blocked
     try:
-        resp = await client.get(url, headers=BROWSER_HEADERS, follow_redirects=True, timeout=5.0)
+        resp = await client.get(url, headers=BROWSER_HEADERS, follow_redirects=True, timeout=6.0)
         if resp.status_code == 200 and "text/html" in resp.headers.get("content-type", "").lower():
-            html = resp.text[:150_000]
+            html = resp.text[:250_000]
             if not info.get("bio"):
                 parsed_meta = parse_html_metadata(html)
                 if isinstance(parsed_meta, dict):
@@ -393,11 +434,8 @@ async def _analyze_generic_html(url: str, client: httpx.AsyncClient) -> dict[str
             for match in JSON_LD_PATTERN.finditer(html):
                 try:
                     ld = json.loads(match.group(1))
+                    _extract_hydration_fields(ld, info)
                     if isinstance(ld, dict):
-                        if ld.get("name") and not info.get("name"):
-                            info["name"] = str(ld["name"])
-                        if ld.get("description") and not info.get("bio"):
-                            info["bio"] = str(ld["description"])
                         if ld.get("jobTitle"):
                             info["job_title"] = str(ld["jobTitle"])
                         same_as = ld.get("sameAs")
@@ -406,29 +444,65 @@ async def _analyze_generic_html(url: str, client: httpx.AsyncClient) -> dict[str
                 except Exception:
                     pass
 
-            # og:image / twitter:image & mailto contact emails
+            # Next.js / SPA hydration JSON extraction
+            next_m = NEXT_DATA_PATTERN.search(html)
+            if next_m:
+                try:
+                    _extract_hydration_fields(json.loads(next_m.group(1)), info)
+                except Exception:
+                    pass
+
+            # og:image / twitter:image / avatar <img> & mailto contact emails
             og_m = OG_IMAGE_PATTERN.search(html)
             if og_m and not info.get("avatar_url"):
                 info["avatar_url"] = og_m.group(1)
+            else:
+                av_m = AVATAR_IMG_PATTERN.search(html)
+                if av_m and not info.get("avatar_url"):
+                    info["avatar_url"] = av_m.group(1)
+
             mailto_emails = list(dict.fromkeys(MAILTO_PATTERN.findall(html)))
             if mailto_emails:
                 info["email"] = mailto_emails[0]
                 info["contact_emails"] = mailto_emails[:3]
 
-            # Cleaned visible text excerpt for deeper LLM/entity extraction
-            visible_text = _strip_html(SCRIPT_STYLE_STRIP.sub(" ", html))
+            # Cleaned visible text excerpt (prioritize <main>/<article>, strip nav/header/footer/scripts)
+            main_chunks = MAIN_CONTENT_PATTERN.findall(html)
+            content_html = " ".join(main_chunks) if main_chunks else html
+            visible_text = _strip_html(SCRIPT_STYLE_STRIP.sub(" ", content_html))
             if len(visible_text) > 80:
-                info["page_text_excerpt"] = visible_text[:2500]
+                info["page_text_excerpt"] = visible_text[:4000]
 
-            # rel="me" & outbound social links
+            # rel="me", social links, and general outbound profile/website links
             rel_links = REL_ME_PATTERN.findall(html)
             social_links = SOCIAL_LINK_PATTERN.findall(html)
-            all_links = list(dict.fromkeys(rel_links + social_links))
-            # Filter out self-links
-            clean_links = [lnk for lnk in all_links if urlparse(lnk).netloc.lower() != host][:8]
+            ext_links = [
+                lnk for lnk in EXT_LINK_PATTERN.findall(html)
+                if not any(ign in lnk.lower() for ign in _IGNORED_EXT_DOMAINS)
+                and not lnk.lower().endswith((".css", ".js", ".png", ".jpg", ".jpeg", ".svg", ".ico", ".woff2"))
+            ]
+            all_links = list(dict.fromkeys(rel_links + social_links + ext_links))
+            clean_links = [lnk for lnk in all_links if urlparse(lnk).netloc.lower() != host][:10]
             if clean_links:
                 existing = info.get("linked_urls", [])
                 info["linked_urls"] = list(dict.fromkeys(existing + clean_links))
+
+            # Opportunistically follow 1 high-value same-host subpage (/about, /stories, /projects, /contact)
+            sub_candidates = [
+                lnk for lnk in all_links
+                if urlparse(lnk).netloc.lower() == host
+                and any(seg in lnk.lower() for seg in ("/about", "/stories", "/projects", "/contact"))
+                and lnk.rstrip("/") != url.rstrip("/")
+            ]
+            if sub_candidates:
+                try:
+                    sub_resp = await client.get(sub_candidates[0], headers=BROWSER_HEADERS, follow_redirects=True, timeout=4.0)
+                    if sub_resp.status_code == 200 and "text/html" in sub_resp.headers.get("content-type", "").lower():
+                        sub_text = _strip_html(SCRIPT_STYLE_STRIP.sub(" ", sub_resp.text[:120_000]))
+                        if len(sub_text) > 80:
+                            info["page_text_excerpt"] = (info.get("page_text_excerpt", "") + "\n" + sub_text[:1500]).strip()
+                except Exception:
+                    pass
     except Exception:
         pass
 
@@ -541,60 +615,87 @@ def _resolve_optional_llm_client(llm_client: Any = None) -> Any:
     return None
 
 
-async def _llm_enrich_hit(hit: Hit, llm_client: Any) -> None:
-    """Use LLM (text + optional avatar/image) to extract structured OSINT details from scraped profile text."""
-    excerpt = hit.raw_data.pop("_page_text_excerpt", "")
-    bio = hit.metadata.get("bio", "")
-    stories = hit.metadata.get("stories") or []
-    avatar_url = hit.metadata.get("avatar_url", "")
-    url = hit.metadata.get("url") or hit.discovered_value
-
-    if not excerpt and not bio and not stories:
+async def _llm_enrich_batch(hits: list[Hit], llm_client: Any, batch_size: int = 6) -> None:
+    """Use LLM (text + optional avatar/image URLs) in batches to extract structured OSINT details across ALL scraped profiles."""
+    rich_hits = [
+        h for h in hits
+        if h.raw_data.get("_page_text_excerpt") or h.metadata.get("bio") or h.metadata.get("stories")
+    ]
+    if not rich_hits:
         return
 
     system = (
-        "You are an OSINT profile extraction assistant. Given scraped public profile text/metadata "
-        "(and optional profile image), extract ONLY facts explicitly present. Return valid JSON with keys: "
-        "real_name (str), office_or_location (str), contact_emails (list[str]), "
-        "projects_or_stories (list[str]), organizations (list[str]), linked_urls (list[str]), summary (str)."
-    )
-    user = (
-        f"Profile URL: {url}\n"
-        f"Bio: {bio}\n"
-        f"Stories: {stories}\n"
-        f"Page Text Excerpt:\n{excerpt[:2000]}"
+        "You are an OSINT profile extraction assistant. Given a JSON list of scraped public profile pages "
+        "(and optional profile images), extract ONLY facts explicitly present for EACH profile URL. "
+        "Return valid JSON: {\"profiles\": {\"<url>\": {\"real_name\": str, \"office_or_location\": str, "
+        "\"contact_emails\": [str], \"projects_or_stories\": [str], \"organizations\": [str], "
+        "\"linked_urls\": [str], \"summary\": str}}}."
     )
 
-    try:
-        if hasattr(llm_client, "complete_multimodal_json") and avatar_url:
-            res = await asyncio.to_thread(
-                llm_client.complete_multimodal_json, system, user, [avatar_url], 500
-            )
-        else:
-            res = await asyncio.to_thread(llm_client.complete_json, system, user, 500)
+    for idx in range(0, len(rich_hits), batch_size):
+        chunk = rich_hits[idx : idx + batch_size]
+        payload_items = []
+        image_urls: list[str] = []
+        url_to_hit: dict[str, Hit] = {}
 
-        if not isinstance(res, dict):
-            return
-        if res.get("real_name") and not hit.metadata.get("name"):
-            hit.metadata["name"] = str(res["real_name"])
-        if res.get("office_or_location") and not hit.metadata.get("location"):
-            hit.metadata["location"] = str(res["office_or_location"])
-        if res.get("contact_emails") and isinstance(res["contact_emails"], list):
-            emails = [str(e) for e in res["contact_emails"] if "@" in str(e)]
-            if emails and not hit.metadata.get("email"):
-                hit.metadata["email"] = emails[0]
-        if res.get("projects_or_stories") and isinstance(res["projects_or_stories"], list):
-            hit.metadata["projects_or_stories"] = [str(p) for p in res["projects_or_stories"][:6]]
-        if res.get("organizations") and isinstance(res["organizations"], list):
-            hit.metadata["organizations"] = [str(o) for o in res["organizations"][:5]]
-        if res.get("summary"):
-            hit.metadata["llm_summary"] = str(res["summary"])
-            existing_desc = hit.raw_data.get("description", "")
-            hit.raw_data["description"] = (
-                f"{existing_desc} | {res['summary']}" if existing_desc else str(res["summary"])
+        for h in chunk:
+            url = str(h.metadata.get("url") or h.discovered_value)
+            url_to_hit[url] = h
+            excerpt = str(h.raw_data.pop("_page_text_excerpt", ""))[:1800]
+            avatar_url = str(h.metadata.get("avatar_url") or "")
+            if avatar_url.startswith("http") and avatar_url not in image_urls:
+                image_urls.append(avatar_url)
+            payload_items.append(
+                {
+                    "url": url,
+                    "site": h.metadata.get("site", ""),
+                    "bio": str(h.metadata.get("bio", ""))[:400],
+                    "stories": h.metadata.get("stories", [])[:3] if isinstance(h.metadata.get("stories"), list) else [],
+                    "page_text": excerpt,
+                }
             )
-    except Exception as exc:
-        logger.debug("LLM profile enrichment skipped for %s: %s", url, exc)
+
+        user = json.dumps(payload_items, ensure_ascii=False)
+        try:
+            if hasattr(llm_client, "complete_multimodal_json") and image_urls:
+                res = await asyncio.to_thread(
+                    llm_client.complete_multimodal_json, system, user, image_urls[:3], 1200
+                )
+            else:
+                res = await asyncio.to_thread(llm_client.complete_json, system, user, 1200)
+
+            profiles_map = res.get("profiles") if isinstance(res, dict) else None
+            if not isinstance(profiles_map, dict):
+                continue
+
+            for url, extracted in profiles_map.items():
+                h = url_to_hit.get(str(url))
+                if not h or not isinstance(extracted, dict):
+                    continue
+                if extracted.get("real_name") and not h.metadata.get("name"):
+                    h.metadata["name"] = str(extracted["real_name"])
+                if extracted.get("office_or_location") and not h.metadata.get("location"):
+                    h.metadata["location"] = str(extracted["office_or_location"])
+                if isinstance(extracted.get("contact_emails"), list):
+                    emails = [str(e) for e in extracted["contact_emails"] if "@" in str(e)]
+                    if emails and not h.metadata.get("email"):
+                        h.metadata["email"] = emails[0]
+                if isinstance(extracted.get("projects_or_stories"), list) and extracted["projects_or_stories"]:
+                    h.metadata["projects_or_stories"] = [str(p) for p in extracted["projects_or_stories"][:6]]
+                if isinstance(extracted.get("organizations"), list) and extracted["organizations"]:
+                    h.metadata["organizations"] = [str(o) for o in extracted["organizations"][:5]]
+                if isinstance(extracted.get("linked_urls"), list) and extracted["linked_urls"]:
+                    existing_links = h.metadata.get("linked_urls") or []
+                    new_links = [str(u) for u in extracted["linked_urls"] if str(u).startswith("http")]
+                    h.metadata["linked_urls"] = list(dict.fromkeys(list(existing_links) + new_links))[:12]
+                if extracted.get("summary"):
+                    h.metadata["llm_summary"] = str(extracted["summary"])
+                    existing_desc = h.raw_data.get("description", "")
+                    h.raw_data["description"] = (
+                        f"{existing_desc} | {extracted['summary']}" if existing_desc else str(extracted["summary"])
+                    )
+        except Exception as exc:
+            logger.debug("LLM batch profile enrichment skipped for batch %d: %s", idx, exc)
 
 
 async def analyze_profiles_batch(
@@ -603,9 +704,8 @@ async def analyze_profiles_batch(
     max_profiles: int = 40,
     concurrency: int = 12,
     llm_client: Any = None,
-    max_llm_profiles: int = 4,
 ) -> None:
-    """Concurrently analyze all discovered PROFILE hits up to max_profiles, with optional LLM extraction."""
+    """Concurrently analyze ALL discovered PROFILE hits up to max_profiles, with batched LLM extraction."""
     profile_hits = [h for h in hits if h.discovered_type == EntityType.PROFILE][:max_profiles]
     if not profile_hits:
         return
@@ -620,12 +720,7 @@ async def analyze_profiles_batch(
 
     active_llm = _resolve_optional_llm_client(llm_client)
     if active_llm is not None:
-        rich_hits = [
-            h for h in profile_hits
-            if h.raw_data.get("_page_text_excerpt") or h.metadata.get("stories")
-        ][:max_llm_profiles]
-        if rich_hits:
-            await asyncio.gather(*[_llm_enrich_hit(h, active_llm) for h in rich_hits], return_exceptions=True)
+        await _llm_enrich_batch(profile_hits, active_llm, batch_size=6)
     for h in profile_hits:
         h.raw_data.pop("_page_text_excerpt", None)
 

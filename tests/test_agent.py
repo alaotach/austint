@@ -872,8 +872,18 @@ async def test_profile_analyzer_wattpad_playstore_and_synthesis() -> None:
 
     fake_llm = FakeClient(
         responses=[
-            {"summary": "Wattpad writer", "projects_or_stories": ["Replied to your story"]},
-            {"summary": "Android developer", "office_or_location": "123 Tech Park, New Delhi"},
+            {
+                "profiles": {
+                    "https://www.wattpad.com/user/alaotach": {
+                        "summary": "Wattpad writer",
+                        "projects_or_stories": ["Replied to your story"],
+                    },
+                    "https://play.google.com/store/apps/details?id=com.alaotach.app&hl=en": {
+                        "summary": "Android developer",
+                        "office_or_location": "123 Tech Park, New Delhi",
+                    },
+                }
+            },
             {
                 "summary": "Connected Wattpad author and Play Store developer.",
                 "inferred_name": "Aryan",
