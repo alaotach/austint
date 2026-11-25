@@ -6,11 +6,34 @@ import json
 import logging
 import os
 import re
+from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
 import httpx
 
 logger = logging.getLogger(__name__)
+
+
+def _load_dotenv() -> None:
+    """Populate os.environ from local .env if present (without overriding existing vars)."""
+    env_path = Path(__file__).resolve().parents[2] / ".env"
+    if not env_path.exists():
+        return
+    try:
+        for raw_line in env_path.read_text(encoding="utf-8").splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, val = line.split("=", 1)
+            key = key.strip()
+            val = val.strip().strip('"').strip("'")
+            if key and key not in os.environ:
+                os.environ[key] = val
+    except Exception:
+        pass
+
+
+_load_dotenv()
 
 
 class LLMBudgetExceededError(RuntimeError):
@@ -66,10 +89,20 @@ class BaseClient:
         cleaned = strip_code_fences(raw_text)
         try:
             parsed = json.loads(cleaned)
-            if not isinstance(parsed, dict):
-                raise ValueError(f"Expected JSON object, got {type(parsed).__name__}")
         except json.JSONDecodeError as exc:
-            raise ValueError(f"Failed to decode JSON from LLM: {exc}") from exc
+            # Fallback: extract first balanced-ish {...} JSON object if wrapped in prose
+            start = cleaned.find("{")
+            end = cleaned.rfind("}")
+            if start != -1 and end > start:
+                try:
+                    parsed = json.loads(cleaned[start : end + 1])
+                except json.JSONDecodeError:
+                    raise ValueError(f"Failed to decode JSON from LLM: {exc}") from exc
+            else:
+                raise ValueError(f"Failed to decode JSON from LLM: {exc}") from exc
+
+        if not isinstance(parsed, dict):
+            raise ValueError(f"Expected JSON object, got {type(parsed).__name__}")
 
         self.calls_made += 1
         self.total_tokens += token_count
@@ -214,13 +247,93 @@ class FakeClient(BaseClient):
         return self._parse_payload(raw, self.tokens_per_call)
 
 
+class OpenRouterClient(BaseClient):
+    """OpenAI-compatible / OpenRouter client (supports Hack Club proxy and multimodal image URLs)."""
+
+    def __init__(
+        self,
+        api_key: str | None = None,
+        model: str | None = None,
+        base_url: str | None = None,
+        call_budget: int = 20,
+        timeout: float = 25.0,
+    ) -> None:
+        super().__init__(call_budget=call_budget, timeout=timeout)
+        _load_dotenv()
+        self.api_key = api_key or os.getenv("OPENROUTER_API_KEY", "")
+        self.model = model or os.getenv("OPENROUTER_MODEL", "openrouter/free")
+        self.base_url = base_url or os.getenv(
+            "OPENROUTER_BASE_URL",
+            "https://ai.hackclub.com/proxy/v1/chat/completions",
+        )
+
+    def complete_json(self, system: str, user: str, max_tokens: int = 1000) -> dict[str, Any]:
+        return self.complete_multimodal_json(system=system, user=user, image_urls=None, max_tokens=max_tokens)
+
+    def complete_multimodal_json(
+        self,
+        system: str,
+        user: str,
+        image_urls: list[str] | None = None,
+        max_tokens: int = 1000,
+    ) -> dict[str, Any]:
+        if not self.api_key:
+            raise ValueError("OPENROUTER_API_KEY is not configured in environment.")
+
+        self._check_budget()
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+        if image_urls:
+            user_content: Any = [{"type": "text", "text": user}]
+            for img_url in image_urls[:3]:
+                if isinstance(img_url, str) and img_url.startswith("http"):
+                    user_content.append({"type": "image_url", "image_url": {"url": img_url}})
+        else:
+            user_content = user
+
+        payload = {
+            "model": self.model,
+            "max_tokens": max_tokens,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user_content},
+            ],
+        }
+
+        last_exc: Exception | None = None
+        for attempt in range(2):
+            try:
+                with httpx.Client(timeout=self.timeout) as client:
+                    resp = client.post(self.base_url, json=payload, headers=headers)
+                    resp.raise_for_status()
+                    data = resp.json()
+                    choices = data.get("choices") or []
+                    raw_text = ""
+                    if choices:
+                        msg = choices[0].get("message") or {}
+                        raw_text = str(msg.get("content") or "")
+                    usage = data.get("usage") or {}
+                    token_count = int(usage.get("total_tokens") or (usage.get("prompt_tokens", 0) + usage.get("completion_tokens", 0)))
+                    return self._parse_payload(raw_text, token_count)
+            except Exception as exc:
+                last_exc = exc
+                logger.warning("OpenRouter request attempt %d failed: %s", attempt + 1, exc)
+
+        raise RuntimeError(f"OpenRouter completion failed after 1 retry: {last_exc}") from last_exc
+
+
 def get_llm_client(provider: str | None = None, call_budget: int = 20) -> LLMClient:
     """Factory creating configured LLM client instance."""
+    _load_dotenv()
     chosen = (provider or os.getenv("LLM_PROVIDER", "anthropic")).lower()
+    if chosen in ("openrouter", "openai", "hackclub"):
+        return OpenRouterClient(call_budget=call_budget)
     if chosen == "anthropic":
         return AnthropicClient(call_budget=call_budget)
     if chosen == "gemini":
         return GeminiClient(call_budget=call_budget)
     if chosen == "fake":
         return FakeClient(call_budget=call_budget)
-    raise ValueError(f"Unknown LLM provider '{provider}'. Choose 'anthropic', 'gemini', or 'fake'.")
+    raise ValueError(f"Unknown LLM provider '{provider}'. Choose 'openrouter', 'anthropic', 'gemini', or 'fake'.")

@@ -795,3 +795,113 @@ async def test_stream_checker_filters_catchall_and_bot_challenge() -> None:
             base_hit = await _probe_site(client, "CatchAll", cfg, _BASELINE_PROBE_USERNAME, "username:realuser")
         assert real_hit is not None
         assert base_hit is not None  # Baseline matches -> stream_username_check drops it as catch-all 200
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_openrouter_client_and_multimodal() -> None:
+    """OpenRouterClient should call OpenAI-compatible endpoint and support multimodal image URLs."""
+    from osint_agent.llm.client import OpenRouterClient
+
+    respx.post("https://ai.hackclub.com/proxy/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "choices": [{"message": {"content": "```json\n{\"real_name\": \"Aryan\", \"office_or_location\": \"Delhi\"}\n```"}}],
+                "usage": {"total_tokens": 42},
+            },
+        )
+    )
+    client = OpenRouterClient(api_key="test-key", call_budget=5)
+    res = client.complete_multimodal_json(
+        system="Extract JSON",
+        user="Analyze profile",
+        image_urls=["https://example.com/avatar.png"],
+    )
+    assert res["real_name"] == "Aryan"
+    assert res["office_or_location"] == "Delhi"
+    assert client.total_tokens == 42
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_profile_analyzer_wattpad_playstore_and_synthesis() -> None:
+    """profile_analyzer should extract Wattpad stories, Play Store dev details, and LLM cross-profile relations."""
+    import networkx as nx
+
+    from osint_agent.collectors.profile_analyzer import analyze_profiles_batch, synthesize_profile_relations
+    from osint_agent.llm.client import FakeClient
+
+    respx.get("https://www.wattpad.com/api/v3/users/alaotach").mock(
+        return_value=httpx.Response(200, json={"name": "Aryan", "description": "Writer", "avatar": "https://img.wattpad.com/a.jpg"})
+    )
+    respx.get("https://www.wattpad.com/api/v3/users/alaotach/stories").mock(
+        return_value=httpx.Response(
+            200,
+            json={"stories": [{"title": "Replied to your story", "description": "A love story", "voteCount": 35}]},
+        )
+    )
+    respx.get("https://play.google.com/store/apps/details?id=com.alaotach.app&hl=en").mock(
+        return_value=httpx.Response(
+            200,
+            text=(
+                "<html><head><title>Demo App - Google Play</title></head>"
+                "<body>Developer address: 123 Tech Park, New Delhi "
+                "<a href='mailto:dev@alaotach.dev'>dev@alaotach.dev</a>"
+                "<a href='https://alaotach.dev'>Website</a></body></html>"
+            ),
+        )
+    )
+
+    wattpad_hit = Hit(
+        target_entity_id="username:alaotach",
+        discovered_type=EntityType.PROFILE,
+        discovered_value="https://www.wattpad.com/user/alaotach",
+        relation="account_on",
+        source_tool="maigret",
+        metadata={"username": "alaotach", "site": "Wattpad", "url": "https://www.wattpad.com/user/alaotach"},
+    )
+    play_hit = Hit(
+        target_entity_id="username:alaotach",
+        discovered_type=EntityType.PROFILE,
+        discovered_value="https://play.google.com/store/apps/details?id=com.alaotach.app&hl=en",
+        relation="published_app",
+        source_tool="playstore_intel",
+        metadata={"site": "Google Play Store", "url": "https://play.google.com/store/apps/details?id=com.alaotach.app&hl=en"},
+    )
+
+    fake_llm = FakeClient(
+        responses=[
+            {"summary": "Wattpad writer", "projects_or_stories": ["Replied to your story"]},
+            {"summary": "Android developer", "office_or_location": "123 Tech Park, New Delhi"},
+            {
+                "summary": "Connected Wattpad author and Play Store developer.",
+                "inferred_name": "Aryan",
+                "locations": ["New Delhi"],
+                "organizations": [],
+                "relations": [
+                    {
+                        "source_url": "https://www.wattpad.com/user/alaotach",
+                        "target_url": "https://play.google.com/store/apps/details?id=com.alaotach.app&hl=en",
+                        "relation": "same_creator",
+                        "evidence": "Shared alias alaotach",
+                    }
+                ],
+            },
+        ]
+    )
+
+    async with httpx.AsyncClient() as client:
+        await analyze_profiles_batch([wattpad_hit, play_hit], client, llm_client=fake_llm)
+
+    assert wattpad_hit.metadata.get("stories")
+    assert "Replied to your story" in wattpad_hit.metadata["stories"][0]
+    assert play_hit.metadata.get("email") == "dev@alaotach.dev"
+    assert "123 Tech Park" in play_hit.metadata.get("location", "")
+
+    g = nx.DiGraph()
+    g.add_node("profile:wattpad", entity_type="profile", value=wattpad_hit.discovered_value, attributes=wattpad_hit.metadata)
+    g.add_node("profile:play", entity_type="profile", value=play_hit.discovered_value, attributes=play_hit.metadata)
+    synth = await synthesize_profile_relations(g, llm_client=fake_llm)
+    assert synth is not None
+    assert g.has_edge("profile:wattpad", "profile:play")

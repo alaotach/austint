@@ -1974,3 +1974,66 @@ async def collect_open_data_intel(entity: Entity, client: httpx.AsyncClient) -> 
             logger.debug("OpenSanctions lookup failed for %s: %s", query, exc)
 
     return hits
+
+
+@register_tool(
+    name="playstore_intel",
+    target_types=[EntityType.USERNAME, EntityType.PUBLIC_FIGURE, EntityType.ORG, EntityType.CONSENTING_PERSON],
+    description="Searches Google Play Store developer pages and apps to extract developer email, website, and office address.",
+)
+async def collect_playstore_intel(entity: Entity, client: httpx.AsyncClient) -> list[Hit]:
+    """Discover Google Play Store developer pages and published apps for a handle, person, or org."""
+    from urllib.parse import quote
+
+    query = entity.value.strip().lstrip("@")
+    if not query or len(query) < 3:
+        return []
+
+    hits: list[Hit] = []
+    seen_urls: set[str] = set()
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
+        ),
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+
+    dev_url = f"https://play.google.com/store/apps/developer?id={quote(query)}&hl=en"
+    try:
+        dev_resp = await client.get(dev_url, headers=headers, follow_redirects=True, timeout=8.0)
+        if dev_resp.status_code == 200 and "/store/apps/details?id=" in dev_resp.text:
+            seen_urls.add(dev_url)
+            hits.append(
+                Hit(
+                    target_entity_id=entity.id,
+                    discovered_type=EntityType.PROFILE,
+                    discovered_value=dev_url,
+                    relation="developer_on",
+                    source_tool="playstore_intel",
+                    is_trusted=True,
+                    raw_data={"site": "Google Play Store", "developer": query},
+                    metadata={"site": "Google Play Store", "url": dev_url, "name": query},
+                )
+            )
+            app_ids = list(dict.fromkeys(re.findall(r"/store/apps/details\?id=([a-zA-Z0-9._]+)", dev_resp.text)))
+            for app_id in app_ids[:4]:
+                app_url = f"https://play.google.com/store/apps/details?id={app_id}&hl=en"
+                if app_url not in seen_urls:
+                    seen_urls.add(app_url)
+                    hits.append(
+                        Hit(
+                            target_entity_id=entity.id,
+                            discovered_type=EntityType.PROFILE,
+                            discovered_value=app_url,
+                            relation="published_app",
+                            source_tool="playstore_intel",
+                            is_trusted=True,
+                            raw_data={"site": "Google Play Store", "app_id": app_id, "developer": query},
+                            metadata={"site": "Google Play Store", "url": app_url, "name": app_id},
+                        )
+                    )
+    except (httpx.HTTPError, httpx.TimeoutException) as exc:
+        logger.debug("Play Store developer lookup failed for %s: %s", query, exc)
+
+    return hits
