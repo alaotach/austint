@@ -1064,3 +1064,232 @@ async def test_profile_analyzer_github_repo_deep_scrape() -> None:
     assert "https://api.eli.example.dev" in repo_hit.metadata["linked_urls"]
     assert "https://play.google.com/store/apps/details?id=com.alaotach.elinew&hl=en" in repo_hit.metadata["linked_urls"]
     assert repo_hit.metadata.get("ml_keywords")
+
+
+# ---------------------------------------------------------------------------
+# Breach intelligence tests (XposedOrNot analytics + Hudson Rock Cavalier)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_tool_email_intel_breach_analytics() -> None:
+    """email_intel should parse XposedOrNot breach-analytics and emit a breach_analytics Hit."""
+    import hashlib
+    from unittest.mock import AsyncMock, patch
+    from osint_agent.collectors.tools import collect_email_intel
+
+    email = "breach_test@example.com"
+    email_hash = hashlib.md5(email.encode("utf-8")).hexdigest()
+
+    # Gravatar — 404 so no Gravatar hits
+    respx.get(f"https://en.gravatar.com/{email_hash}.json").mock(
+        return_value=httpx.Response(404)
+    )
+    # GitHub search — no results
+    respx.get("https://api.github.com/search/commits").mock(
+        return_value=httpx.Response(200, json={"items": [], "total_count": 0})
+    )
+    respx.get("https://api.github.com/search/users").mock(
+        return_value=httpx.Response(200, json={"items": [], "total_count": 0})
+    )
+    # XposedOrNot check-email — returns two breaches
+    respx.get(f"https://api.xposedornot.com/v1/check-email/{email}").mock(
+        return_value=httpx.Response(
+            200,
+            json={"breaches": [["TestBreach2023", "AnotherLeak2022"]]},
+        )
+    )
+    # XposedOrNot breach-analytics — returns detailed metrics
+    respx.get("https://api.xposedornot.com/v1/breach-analytics").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "BreachMetrics": {
+                    "risk": [{"risk_label": "High", "risk_score": 7}],
+                    "passwords_strength": [
+                        {"PlainText": 1, "EasyToCrack": 2, "StrongHash": 3}
+                    ],
+                    "xposed_data": [
+                        {
+                            "children": [
+                                {
+                                    "children": [
+                                        {"name": "data_emails", "value": 1},
+                                        {"name": "data_passwords", "value": 1},
+                                        {"name": "data_names", "value": 1},
+                                    ]
+                                }
+                            ]
+                        }
+                    ],
+                }
+            },
+        )
+    )
+    # Duolingo — no user
+    respx.get("https://www.duolingo.com/2017-06-30/users").mock(
+        return_value=httpx.Response(200, json={"users": []})
+    )
+    # PGP — no key
+    respx.get("https://keys.openpgp.org/vks/v1/by-email/breach_test%40example.com").mock(
+        return_value=httpx.Response(404)
+    )
+    respx.get("https://keyserver.ubuntu.com/pks/lookup").mock(
+        return_value=httpx.Response(404)
+    )
+    # Hudson Rock by email — no stealers
+    respx.get("https://cavalier.hudsonrock.com/api/json/v2/osint-tools/search-by-email").mock(
+        return_value=httpx.Response(200, json={"stealers": []})
+    )
+
+    email_entity = Entity.create(entity_type=EntityType.EMAIL, value=email)
+    with patch("osint_agent.collectors.tools._find_cli_binary", return_value=None):
+        async with httpx.AsyncClient() as client:
+            hits = await collect_email_intel(email_entity, client)
+
+    relations = [h.relation for h in hits]
+    # Should have individual breach names
+    assert "breach_exposure" in relations
+    # Should have detailed analytics hit
+    assert "breach_analytics" in relations
+
+    analytics_hit = next(h for h in hits if h.relation == "breach_analytics")
+    assert analytics_hit.raw_data["risk_label"] == "High"
+    assert analytics_hit.raw_data["risk_score"] == 7
+    assert analytics_hit.raw_data["plaintext_passwords"] == 1
+    assert analytics_hit.raw_data["easy_crack_hashes"] == 2
+    assert analytics_hit.raw_data["strong_hashes"] == 3
+    assert "emails" in analytics_hit.raw_data["exposed_data_types"]
+    assert "passwords" in analytics_hit.raw_data["exposed_data_types"]
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_tool_breach_intel_hudson_rock_username() -> None:
+    """breach_intel should emit infostealer_compromise Hits from Hudson Rock by username."""
+    from osint_agent.collectors.tools import collect_breach_intel
+
+    username = "testuser_osint"
+
+    respx.get("https://cavalier.hudsonrock.com/api/json/v2/osint-tools/search-by-username").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "stealers": [
+                    {
+                        "computer_name": "DESKTOP-XYZ123 (TestUser)",
+                        "operating_system": "Windows 11 (Build 22631)",
+                        "stealer_family": "RedLine",
+                        "date_compromised": "2024-03-15T12:00:00.000Z",
+                        "total_user_services": 42,
+                        "ip": "1.2.3.*",
+                        "top_logins": ["testuser@gmail.com", "testuser@outlook.com"],
+                        "top_passwords": ["p*****d", "s*****t"],
+                    }
+                ]
+            },
+        )
+    )
+
+    username_entity = Entity.create(entity_type=EntityType.USERNAME, value=username)
+    async with httpx.AsyncClient() as client:
+        hits = await collect_breach_intel(username_entity, client)
+
+    assert len(hits) == 1
+    hit = hits[0]
+    assert hit.relation == "infostealer_compromise"
+    assert hit.source_tool == "breach_intel"
+    assert hit.raw_data["computer_name"] == "DESKTOP-XYZ123 (TestUser)"
+    assert hit.raw_data["operating_system"] == "Windows 11 (Build 22631)"
+    assert hit.raw_data["stealer_type"] == "RedLine"
+    assert hit.raw_data["total_user_services"] == 42
+    assert hit.raw_data["ip"] == "1.2.3.*"
+    # Verify passwords are stored in redacted form only
+    assert all("*" in p for p in hit.raw_data["top_passwords_redacted"])
+    assert "infostealer" in hit.discovered_value
+    assert hit.metadata["site"] == "Hudson Rock Cavalier"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_tool_breach_intel_hudson_rock_no_stealers() -> None:
+    """breach_intel should return empty list when Hudson Rock finds no stealers."""
+    from osint_agent.collectors.tools import collect_breach_intel
+
+    respx.get("https://cavalier.hudsonrock.com/api/json/v2/osint-tools/search-by-username").mock(
+        return_value=httpx.Response(200, json={"stealers": []})
+    )
+
+    entity = Entity.create(entity_type=EntityType.USERNAME, value="cleanuser_notcompromised")
+    async with httpx.AsyncClient() as client:
+        hits = await collect_breach_intel(entity, client)
+
+    assert hits == []
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_tool_email_intel_hudson_rock_infostealer() -> None:
+    """email_intel should emit infostealer_compromise Hit when Hudson Rock finds stealer data by email."""
+    import hashlib
+    from unittest.mock import patch
+    from osint_agent.collectors.tools import collect_email_intel
+
+    email = "stealer_victim@test.com"
+    email_hash = hashlib.md5(email.encode("utf-8")).hexdigest()
+
+    respx.get(f"https://en.gravatar.com/{email_hash}.json").mock(return_value=httpx.Response(404))
+    respx.get("https://api.github.com/search/commits").mock(
+        return_value=httpx.Response(200, json={"items": [], "total_count": 0})
+    )
+    respx.get("https://api.github.com/search/users").mock(
+        return_value=httpx.Response(200, json={"items": [], "total_count": 0})
+    )
+    respx.get(f"https://api.xposedornot.com/v1/check-email/stealer_victim%40test.com").mock(
+        return_value=httpx.Response(404)
+    )
+    respx.get("https://api.xposedornot.com/v1/breach-analytics").mock(
+        return_value=httpx.Response(404)
+    )
+    respx.get("https://www.duolingo.com/2017-06-30/users").mock(
+        return_value=httpx.Response(200, json={"users": []})
+    )
+    respx.get("https://keys.openpgp.org/vks/v1/by-email/stealer_victim%40test.com").mock(
+        return_value=httpx.Response(404)
+    )
+    respx.get("https://keyserver.ubuntu.com/pks/lookup").mock(return_value=httpx.Response(404))
+
+    # Hudson Rock by email — returns one stealer
+    respx.get("https://cavalier.hudsonrock.com/api/json/v2/osint-tools/search-by-email").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "stealers": [
+                    {
+                        "computer_name": "LAPTOP-VICTIM (VictimUser)",
+                        "operating_system": "Windows 10 (Build 19045)",
+                        "stealer_family": "Vidar",
+                        "date_compromised": "2023-11-01T08:30:00.000Z",
+                        "total_user_services": 15,
+                        "ip": "5.6.7.*",
+                        "top_logins": ["victim@test.com"],
+                        "top_passwords": ["v*****m"],
+                    }
+                ]
+            },
+        )
+    )
+
+    email_entity = Entity.create(entity_type=EntityType.EMAIL, value=email)
+    with patch("osint_agent.collectors.tools._find_cli_binary", return_value=None):
+        async with httpx.AsyncClient() as client:
+            hits = await collect_email_intel(email_entity, client)
+
+    stealer_hits = [h for h in hits if h.relation == "infostealer_compromise"]
+    assert len(stealer_hits) == 1
+    sh = stealer_hits[0]
+    assert sh.raw_data["stealer_type"] == "Vidar"
+    assert sh.raw_data["computer_name"] == "LAPTOP-VICTIM (VictimUser)"
+    assert sh.source_tool == "email_intel"
+    assert "stealer_victim@test.com" in sh.discovered_value or "infostealer" in sh.discovered_value

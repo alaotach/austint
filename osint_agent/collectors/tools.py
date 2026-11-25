@@ -1204,6 +1204,7 @@ async def collect_email_intel(entity: Entity, client: httpx.AsyncClient) -> list
             logger.debug("GitHub user email lookup failed for %s: %s", email, exc)
 
     async def _check_xposedornot() -> None:
+        # 1. Basic breach name list
         try:
             resp = await client.get(
                 f"https://api.xposedornot.com/v1/check-email/{quote(email, safe='')}",
@@ -1232,7 +1233,84 @@ async def collect_email_intel(entity: Entity, client: httpx.AsyncClient) -> list
                         )
                     )
         except (httpx.HTTPError, httpx.TimeoutException, ValueError) as exc:
-            logger.debug("XposedOrNot lookup failed for %s: %s", email, exc)
+            logger.debug("XposedOrNot check-email failed for %s: %s", email, exc)
+
+        # 2. Detailed breach analytics: data types exposed, risk score, password strength
+        try:
+            analytics_resp = await client.get(
+                f"https://api.xposedornot.com/v1/breach-analytics?email={quote(email, safe='')}",
+                headers={"User-Agent": DEFAULT_USER_AGENT},
+                timeout=8.0,
+            )
+            if analytics_resp.status_code == 200:
+                adata = analytics_resp.json()
+                metrics = adata.get("BreachMetrics") or {}
+
+                risk_info = (metrics.get("risk") or [{}])[0] if metrics.get("risk") else {}
+                risk_label = risk_info.get("risk_label", "")
+                risk_score = risk_info.get("risk_score", 0)
+
+                pwd_strength_list = metrics.get("passwords_strength") or [{}]
+                pwd_strength = pwd_strength_list[0] if pwd_strength_list else {}
+                plaintext_count = int(pwd_strength.get("PlainText") or 0)
+                easy_crack_count = int(pwd_strength.get("EasyToCrack") or 0)
+                strong_hash_count = int(pwd_strength.get("StrongHash") or 0)
+
+                # Extract exposed data types from xposed_data tree
+                exposed_data_types: list[str] = []
+                for entry in metrics.get("xposed_data") or []:
+                    for child in entry.get("children") or []:
+                        for item in child.get("children") or []:
+                            if item.get("value", 0) > 0:
+                                name_raw = str(item.get("name") or "").replace("data_", "").strip()
+                                if name_raw:
+                                    exposed_data_types.append(name_raw)
+
+                if risk_label or exposed_data_types:
+                    summary_parts = []
+                    if risk_label:
+                        summary_parts.append(f"Breach Risk: {risk_label} (score {risk_score})")
+                    if exposed_data_types:
+                        summary_parts.append("Exposed data types: " + ", ".join(exposed_data_types[:8]))
+                    if plaintext_count > 0:
+                        summary_parts.append(f"⚠ {plaintext_count} plaintext password(s) exposed in breach data")
+                    if easy_crack_count > 0:
+                        summary_parts.append(f"⚠ {easy_crack_count} easy-to-crack password hash(es) in breach data")
+                    if strong_hash_count > 0:
+                        summary_parts.append(f"{strong_hash_count} strong hash(es) in breach data")
+
+                    _add_hit(
+                        Hit(
+                            target_entity_id=entity.id,
+                            discovered_type=EntityType.PROFILE,
+                            discovered_value=f"breach-analytics:{email}",
+                            relation="breach_analytics",
+                            source_tool="email_intel",
+                            is_trusted=True,
+                            raw_data={
+                                "source": "xposedornot_analytics",
+                                "risk_label": risk_label,
+                                "risk_score": risk_score,
+                                "exposed_data_types": exposed_data_types,
+                                "plaintext_passwords": plaintext_count,
+                                "easy_crack_hashes": easy_crack_count,
+                                "strong_hashes": strong_hash_count,
+                                "description": " | ".join(summary_parts),
+                            },
+                            metadata={
+                                "site": "XposedOrNot Analytics",
+                                "risk_label": risk_label,
+                                "risk_score": str(risk_score),
+                                "exposed_data_types": exposed_data_types,
+                                "password_exposure_note": (
+                                    f"plaintext:{plaintext_count}, easy_crack:{easy_crack_count}, strong_hash:{strong_hash_count}"
+                                ),
+                                "bio": " | ".join(summary_parts),
+                            },
+                        )
+                    )
+        except (httpx.HTTPError, httpx.TimeoutException, ValueError) as exc:
+            logger.debug("XposedOrNot analytics failed for %s: %s", email, exc)
 
     async def _check_duolingo() -> None:
         try:
@@ -1330,12 +1408,86 @@ async def collect_email_intel(entity: Entity, client: httpx.AsyncClient) -> list
         except (httpx.HTTPError, httpx.TimeoutException):
             pass
 
+    async def _check_hudson_rock_email() -> None:
+        """Check Hudson Rock Cavalier for infostealer compromise data tied to this email."""
+        try:
+            resp = await client.get(
+                f"https://cavalier.hudsonrock.com/api/json/v2/osint-tools/search-by-email?email={quote(email, safe='')}",
+                headers={"User-Agent": DEFAULT_USER_AGENT},
+                timeout=10.0,
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                stealers = data.get("stealers") or []
+                for stealer in stealers[:5]:
+                    computer = stealer.get("computer_name", "")
+                    os_name = stealer.get("operating_system", "")
+                    stealer_family = stealer.get("stealer_family", "")
+                    date_comp = stealer.get("date_compromised", "")
+                    total_svcs = stealer.get("total_user_services", 0)
+                    ip_addr = stealer.get("ip", "")
+                    top_logins = stealer.get("top_logins") or []
+                    top_passwords = stealer.get("top_passwords") or []
+                    # Build summary — passwords are already redacted by Hudson Rock (e.g. "k********4")
+                    summary_parts = []
+                    if computer:
+                        summary_parts.append(f"Computer: {computer}")
+                    if os_name:
+                        summary_parts.append(f"OS: {os_name}")
+                    if stealer_family:
+                        summary_parts.append(f"Stealer: {stealer_family}")
+                    if date_comp:
+                        summary_parts.append(f"Compromised: {date_comp}")
+                    if total_svcs:
+                        summary_parts.append(f"Services in stealer log: {total_svcs}")
+                    if ip_addr:
+                        summary_parts.append(f"IP (partial): {ip_addr}")
+                    if top_logins:
+                        summary_parts.append(f"Sample logins (redacted): {', '.join(str(l) for l in top_logins[:3])}")
+                    if top_passwords:
+                        summary_parts.append(f"Sample passwords (redacted by provider): {', '.join(str(p) for p in top_passwords[:3])}")
+                    _add_hit(
+                        Hit(
+                            target_entity_id=entity.id,
+                            discovered_type=EntityType.PROFILE,
+                            discovered_value=f"infostealer:{email}:{date_comp or stealer_family or 'unknown'}",
+                            relation="infostealer_compromise",
+                            source_tool="email_intel",
+                            is_trusted=True,
+                            raw_data={
+                                "source": "hudson_rock_cavalier",
+                                "computer_name": computer,
+                                "operating_system": os_name,
+                                "stealer_type": stealer_family,
+                                "date_compromised": date_comp,
+                                "total_user_services": total_svcs,
+                                "ip": ip_addr,
+                                "top_logins_redacted": top_logins[:3],
+                                "top_passwords_redacted": top_passwords[:3],
+                                "description": " | ".join(summary_parts),
+                            },
+                            metadata={
+                                "site": "Hudson Rock Cavalier",
+                                "computer_name": computer,
+                                "operating_system": os_name,
+                                "stealer_type": stealer_family,
+                                "date_compromised": date_comp,
+                                "total_user_services": str(total_svcs),
+                                "bio": " | ".join(summary_parts),
+                                "note": "Infostealer compromise metadata only. Passwords shown as redacted patterns provided by Hudson Rock.",
+                            },
+                        )
+                    )
+        except (httpx.HTTPError, httpx.TimeoutException, ValueError) as exc:
+            logger.debug("Hudson Rock email lookup failed for %s: %s", email, exc)
+
     await asyncio.gather(
         _check_gravatar(),
         _check_github(),
         _check_xposedornot(),
         _check_duolingo(),
         _check_pgp_keyservers(),
+        _check_hudson_rock_email(),
         return_exceptions=True,
     )
 
@@ -2040,5 +2192,111 @@ async def collect_playstore_intel(entity: Entity, client: httpx.AsyncClient) -> 
                     )
     except (httpx.HTTPError, httpx.TimeoutException) as exc:
         logger.debug("Play Store developer lookup failed for %s: %s", query, exc)
+
+    return hits
+
+
+@register_tool(
+    name="breach_intel",
+    target_types=[EntityType.USERNAME, EntityType.PUBLIC_FIGURE, EntityType.CONSENTING_PERSON],
+    description=(
+        "Checks Hudson Rock Cavalier for infostealer compromise data tied to a username, "
+        "reporting breach metadata (computer name, OS, stealer family, compromised date, "
+        "service count, redacted login/password patterns). Never exposes plaintext passwords."
+    ),
+)
+async def collect_breach_intel(entity: Entity, client: httpx.AsyncClient) -> list[Hit]:
+    """Query Hudson Rock Cavalier OSINT API by username for infostealer compromise metadata."""
+    from urllib.parse import quote
+
+    username = entity.value.strip().lstrip("@")
+    if not username or len(username) < 2:
+        return []
+
+    hits: list[Hit] = []
+
+    try:
+        resp = await client.get(
+            f"https://cavalier.hudsonrock.com/api/json/v2/osint-tools/search-by-username?username={quote(username, safe='')}",
+            headers={"User-Agent": DEFAULT_USER_AGENT},
+            timeout=10.0,
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            stealers = data.get("stealers") or []
+            for stealer in stealers[:5]:
+                computer = stealer.get("computer_name", "")
+                os_name = stealer.get("operating_system", "")
+                stealer_family = stealer.get("stealer_family", "")
+                date_comp = stealer.get("date_compromised", "")
+                total_svcs = stealer.get("total_user_services", 0)
+                ip_addr = stealer.get("ip", "")
+                top_logins = stealer.get("top_logins") or []
+                top_passwords = stealer.get("top_passwords") or []
+                # NOTE: Hudson Rock already redacts passwords (e.g. "k********4").
+                # We store and emit only the redacted patterns as metadata — never raw plaintext.
+                summary_parts = []
+                if computer:
+                    summary_parts.append(f"Computer: {computer}")
+                if os_name:
+                    summary_parts.append(f"OS: {os_name}")
+                if stealer_family:
+                    summary_parts.append(f"Stealer: {stealer_family}")
+                if date_comp:
+                    summary_parts.append(f"Compromised: {date_comp}")
+                if total_svcs:
+                    summary_parts.append(f"Services in stealer log: {total_svcs}")
+                if ip_addr:
+                    summary_parts.append(f"IP (partial): {ip_addr}")
+                if top_logins:
+                    summary_parts.append(
+                        f"Sample logins (redacted): {', '.join(str(l) for l in top_logins[:3])}"
+                    )
+                if top_passwords:
+                    summary_parts.append(
+                        f"Sample passwords (redacted by provider): {', '.join(str(p) for p in top_passwords[:3])}"
+                    )
+
+                hits.append(
+                    Hit(
+                        target_entity_id=entity.id,
+                        discovered_type=EntityType.PROFILE,
+                        discovered_value=(
+                            f"infostealer:{username}:{date_comp or stealer_family or 'unknown'}"
+                        ),
+                        relation="infostealer_compromise",
+                        source_tool="breach_intel",
+                        is_trusted=True,
+                        raw_data={
+                            "source": "hudson_rock_cavalier",
+                            "username": username,
+                            "computer_name": computer,
+                            "operating_system": os_name,
+                            "stealer_type": stealer_family,
+                            "date_compromised": date_comp,
+                            "total_user_services": total_svcs,
+                            "ip": ip_addr,
+                            "top_logins_redacted": top_logins[:3],
+                            "top_passwords_redacted": top_passwords[:3],
+                            "description": " | ".join(summary_parts),
+                        },
+                        metadata={
+                            "site": "Hudson Rock Cavalier",
+                            "username": username,
+                            "computer_name": computer,
+                            "operating_system": os_name,
+                            "stealer_type": stealer_family,
+                            "date_compromised": date_comp,
+                            "total_user_services": str(total_svcs),
+                            "bio": " | ".join(summary_parts),
+                            "note": (
+                                "Infostealer compromise metadata only. "
+                                "Passwords shown as redacted patterns as provided by Hudson Rock Cavalier."
+                            ),
+                        },
+                    )
+                )
+    except (httpx.HTTPError, httpx.TimeoutException, ValueError) as exc:
+        logger.debug("Hudson Rock username lookup failed for %s: %s", username, exc)
 
     return hits
