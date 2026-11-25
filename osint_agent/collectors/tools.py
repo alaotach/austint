@@ -794,7 +794,36 @@ async def collect_sherlock(entity: Entity, client: httpx.AsyncClient) -> list[Hi
                 proc.terminate()
                 stdout_bytes, _ = await proc.communicate()
             stdout = stdout_bytes.decode("utf-8", errors="replace")
-            return parse_sherlock_output(stdout, username, entity.id)
+            raw_hits = parse_sherlock_output(stdout, username, entity.id)
+            if not raw_hits:
+                return []
+
+            # Filter out catch-all sites that return HTTP 200 even for a nonexistent username
+            from osint_agent.collectors.stream_checker import _BASELINE_PROBE_USERNAME, _is_bot_or_soft404_response
+
+            async def _verify_sherlock_hit(hit: Hit) -> Hit | None:
+                url = hit.discovered_value
+                if username not in url:
+                    return hit
+                probe_url = url.replace(username, _BASELINE_PROBE_USERNAME)
+                try:
+                    resp = await client.get(probe_url, timeout=4.0, follow_redirects=True)
+                    body = resp.text if resp.status_code < 400 else ""
+                    # If the nonexistent-username URL returns 200 (and isn't a bot/soft404 page that proves absence),
+                    # or if the real URL itself is a bot challenge / soft-404, drop it.
+                    if 200 <= resp.status_code < 300:
+                        return None
+                    if _is_bot_or_soft404_response(resp, body, "status_code"):
+                        # Still check real URL for bot challenge (e.g. LinkedIn recaptcha / Anubis)
+                        real_resp = await client.get(url, timeout=4.0, follow_redirects=True)
+                        if _is_bot_or_soft404_response(real_resp, real_resp.text if real_resp.status_code < 400 else "", "status_code"):
+                            return None
+                except Exception:
+                    return hit
+                return hit
+
+            checked = await asyncio.gather(*(_verify_sherlock_hit(h) for h in raw_hits), return_exceptions=True)
+            return [h for h in checked if isinstance(h, Hit)]
         except Exception as exc:
             logger.warning("Sherlock execution error for %s: %s", username, exc)
             return []
@@ -943,11 +972,16 @@ def parse_holehe_output(stdout: str, email: str, target_id: str) -> list[Hit]:
 @register_tool(
     name="email_intel",
     target_types=[EntityType.EMAIL],
-    description="Checks public email registrations via Holehe, Gravatar profile API, and custom domain linking.",
+    description=(
+        "Checks email intelligence via GitHub commits/users, XposedOrNot breaches, Gravatar, "
+        "Duolingo, OpenPGP/Ubuntu keyservers, Holehe, and custom domain linking."
+    ),
 )
 async def collect_email_intel(entity: Entity, client: httpx.AsyncClient) -> list[Hit]:
-    """Gather public registration, Gravatar profile, and domain leads for an email address."""
+    """Gather public GitHub activity, breach exposure, Gravatar, PGP keys, and registration leads for an email."""
     import hashlib
+    import os
+    from urllib.parse import quote, unquote
 
     email = entity.value.strip().lower()
     if "@" not in email:
@@ -956,11 +990,15 @@ async def collect_email_intel(entity: Entity, client: httpx.AsyncClient) -> list
     hits: list[Hit] = []
     seen_values: set[str] = set()
 
+    def _add_hit(hit: Hit) -> None:
+        if hit.discovered_value not in seen_values:
+            seen_values.add(hit.discovered_value)
+            hits.append(hit)
+
     # 1. Link non-free corporate/custom email domain
     domain = email.split("@", 1)[1].strip()
     if domain and domain not in FREE_EMAIL_PROVIDERS:
-        seen_values.add(domain)
-        hits.append(
+        _add_hit(
             Hit(
                 target_entity_id=entity.id,
                 discovered_type=EntityType.DOMAIN,
@@ -973,102 +1011,376 @@ async def collect_email_intel(entity: Entity, client: httpx.AsyncClient) -> list
             )
         )
 
-    # 2. Query public Gravatar JSON profile
     email_hash = hashlib.md5(email.encode("utf-8")).hexdigest()
-    gravatar_url = f"https://en.gravatar.com/{email_hash}.json"
-    try:
-        resp = await client.get(
-            gravatar_url,
-            headers={"User-Agent": DEFAULT_USER_AGENT},
-            follow_redirects=True,
-            timeout=6.0,
-        )
-        if resp.status_code == 200:
-            entries = resp.json().get("entry", [])
-            if isinstance(entries, list) and entries:
-                prof = entries[0]
-                pref_user = prof.get("preferredUsername")
-                if pref_user and pref_user not in seen_values:
-                    seen_values.add(pref_user)
-                    hits.append(
+    gh_headers = {"User-Agent": DEFAULT_USER_AGENT, "Accept": "application/vnd.github+json"}
+    gh_token = os.environ.get("GITHUB_TOKEN", "").strip()
+    if gh_token:
+        gh_headers["Authorization"] = f"Bearer {gh_token}"
+
+    async def _check_gravatar() -> None:
+        gravatar_url = f"https://en.gravatar.com/{email_hash}.json"
+        found_json = False
+        try:
+            resp = await client.get(
+                gravatar_url,
+                headers={"User-Agent": DEFAULT_USER_AGENT},
+                follow_redirects=True,
+                timeout=6.0,
+            )
+            if resp.status_code == 200:
+                entries = resp.json().get("entry", [])
+                if isinstance(entries, list) and entries:
+                    found_json = True
+                    prof = entries[0]
+                    pref_user = prof.get("preferredUsername")
+                    if pref_user:
+                        _add_hit(
+                            Hit(
+                                target_entity_id=entity.id,
+                                discovered_type=EntityType.USERNAME,
+                                discovered_value=pref_user,
+                                relation="gravatar_handle",
+                                source_tool="email_intel",
+                                is_trusted=True,
+                                raw_data={
+                                    "name": prof.get("displayName"),
+                                    "bio": prof.get("aboutMe"),
+                                    "location": prof.get("currentLocation"),
+                                },
+                                metadata={
+                                    "name": prof.get("displayName", ""),
+                                    "bio": prof.get("aboutMe", ""),
+                                    "location": prof.get("currentLocation", ""),
+                                },
+                            )
+                        )
+                    for acc in prof.get("accounts", []):
+                        acc_url = acc.get("url")
+                        if acc_url:
+                            _add_hit(
+                                Hit(
+                                    target_entity_id=entity.id,
+                                    discovered_type=EntityType.PROFILE,
+                                    discovered_value=acc_url,
+                                    relation="account_on",
+                                    source_tool="email_intel",
+                                    is_trusted=True,
+                                    raw_data={"site": acc.get("shortname"), "method": "gravatar"},
+                                    metadata={"site": acc.get("shortname", ""), "url": acc_url},
+                                )
+                            )
+        except (httpx.HTTPError, httpx.TimeoutException, ValueError) as exc:
+            logger.debug("Gravatar JSON lookup failed for %s: %s", email, exc)
+
+        if not found_json:
+            try:
+                av_resp = await client.get(
+                    f"https://www.gravatar.com/avatar/{email_hash}?d=404",
+                    headers={"User-Agent": DEFAULT_USER_AGENT},
+                    timeout=5.0,
+                )
+                if av_resp.status_code == 200:
+                    _add_hit(
                         Hit(
                             target_entity_id=entity.id,
-                            discovered_type=EntityType.USERNAME,
-                            discovered_value=pref_user,
-                            relation="gravatar_handle",
+                            discovered_type=EntityType.PROFILE,
+                            discovered_value=f"https://www.gravatar.com/{email_hash}",
+                            relation="registered_on",
                             source_tool="email_intel",
                             is_trusted=True,
-                            raw_data={
-                                "name": prof.get("displayName"),
-                                "bio": prof.get("aboutMe"),
-                                "location": prof.get("currentLocation"),
-                            },
-                            metadata={
-                                "name": prof.get("displayName", ""),
-                                "bio": prof.get("aboutMe", ""),
-                                "location": prof.get("currentLocation", ""),
-                            },
+                            raw_data={"site": "gravatar", "method": "avatar_check"},
+                            metadata={"site": "gravatar", "url": f"https://www.gravatar.com/{email_hash}"},
                         )
                     )
-                for acc in prof.get("accounts", []):
-                    acc_url = acc.get("url")
-                    if acc_url and acc_url not in seen_values:
-                        seen_values.add(acc_url)
-                        hits.append(
+            except (httpx.HTTPError, httpx.TimeoutException):
+                pass
+
+    async def _check_github() -> None:
+        encoded_email = quote(email, safe="")
+        # 1) GitHub commit author email search
+        try:
+            c_resp = await client.get(
+                f"https://api.github.com/search/commits?q=author-email:{encoded_email}&per_page=5",
+                headers=gh_headers,
+                timeout=8.0,
+            )
+            if c_resp.status_code == 200:
+                cdata = c_resp.json()
+                total_commits = int(cdata.get("total_count") or 0)
+                for item in cdata.get("items") or []:
+                    author = item.get("author") or {}
+                    login = author.get("login")
+                    commit_author = ((item.get("commit") or {}).get("author") or {})
+                    full_name = commit_author.get("name") or ""
+                    repo_name = (item.get("repository") or {}).get("full_name") or ""
+                    if login:
+                        _add_hit(
+                            Hit(
+                                target_entity_id=entity.id,
+                                discovered_type=EntityType.USERNAME,
+                                discovered_value=login,
+                                relation="github_author_of",
+                                source_tool="email_intel",
+                                is_trusted=True,
+                                raw_data={
+                                    "name": full_name,
+                                    "email": email,
+                                    "commit_count": total_commits,
+                                    "sample_repo": repo_name,
+                                },
+                                metadata={
+                                    "username": login,
+                                    "name": full_name,
+                                    "site": "GitHub",
+                                    "commit_count": str(total_commits),
+                                    "sample_repo": repo_name,
+                                },
+                            )
+                        )
+                        gh_url = f"https://github.com/{login}"
+                        _add_hit(
                             Hit(
                                 target_entity_id=entity.id,
                                 discovered_type=EntityType.PROFILE,
-                                discovered_value=acc_url,
+                                discovered_value=gh_url,
                                 relation="account_on",
                                 source_tool="email_intel",
                                 is_trusted=True,
-                                raw_data={"site": acc.get("shortname"), "method": "gravatar"},
-                                metadata={"site": acc.get("shortname", ""), "url": acc_url},
+                                raw_data={
+                                    "site": "GitHub",
+                                    "name": full_name,
+                                    "commit_count": total_commits,
+                                    "sample_repo": repo_name,
+                                },
+                                metadata={
+                                    "site": "GitHub",
+                                    "url": gh_url,
+                                    "username": login,
+                                    "name": full_name,
+                                    "commit_count": str(total_commits),
+                                },
                             )
                         )
-    except (httpx.HTTPError, httpx.TimeoutException, ValueError) as exc:
-        logger.debug("Gravatar lookup skipped/failed for %s: %s", email, exc)
+        except (httpx.HTTPError, httpx.TimeoutException, ValueError) as exc:
+            logger.debug("GitHub commit email lookup failed for %s: %s", email, exc)
+
+        # 2) GitHub public user email search
+        try:
+            u_resp = await client.get(
+                f"https://api.github.com/search/users?q={encoded_email}+in:email&per_page=3",
+                headers=gh_headers,
+                timeout=8.0,
+            )
+            if u_resp.status_code == 200:
+                for user_item in u_resp.json().get("items") or []:
+                    login = user_item.get("login")
+                    if login:
+                        _add_hit(
+                            Hit(
+                                target_entity_id=entity.id,
+                                discovered_type=EntityType.USERNAME,
+                                discovered_value=login,
+                                relation="github_account_for",
+                                source_tool="email_intel",
+                                is_trusted=True,
+                                raw_data={"site": "GitHub", "email": email},
+                                metadata={"username": login, "site": "GitHub"},
+                            )
+                        )
+                        gh_url = user_item.get("html_url") or f"https://github.com/{login}"
+                        _add_hit(
+                            Hit(
+                                target_entity_id=entity.id,
+                                discovered_type=EntityType.PROFILE,
+                                discovered_value=gh_url,
+                                relation="account_on",
+                                source_tool="email_intel",
+                                is_trusted=True,
+                                raw_data={"site": "GitHub", "username": login},
+                                metadata={"site": "GitHub", "url": gh_url, "username": login},
+                            )
+                        )
+        except (httpx.HTTPError, httpx.TimeoutException, ValueError) as exc:
+            logger.debug("GitHub user email lookup failed for %s: %s", email, exc)
+
+    async def _check_xposedornot() -> None:
+        try:
+            resp = await client.get(
+                f"https://api.xposedornot.com/v1/check-email/{quote(email, safe='')}",
+                headers={"User-Agent": DEFAULT_USER_AGENT},
+                timeout=8.0,
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                breach_lists = data.get("breaches") or []
+                breach_names: list[str] = []
+                if breach_lists and isinstance(breach_lists[0], list):
+                    breach_names = [str(b) for b in breach_lists[0] if b]
+                elif isinstance(breach_lists, list):
+                    breach_names = [str(b) for b in breach_lists if isinstance(b, str)]
+                for breach_name in breach_names:
+                    _add_hit(
+                        Hit(
+                            target_entity_id=entity.id,
+                            discovered_type=EntityType.PROFILE,
+                            discovered_value=f"breach:{breach_name}",
+                            relation="breach_exposure",
+                            source_tool="email_intel",
+                            is_trusted=True,
+                            raw_data={"breach": breach_name, "email": email, "source": "xposedornot"},
+                            metadata={"site": breach_name, "breach": breach_name, "source": "xposedornot", "email": email},
+                        )
+                    )
+        except (httpx.HTTPError, httpx.TimeoutException, ValueError) as exc:
+            logger.debug("XposedOrNot lookup failed for %s: %s", email, exc)
+
+    async def _check_duolingo() -> None:
+        try:
+            resp = await client.get(
+                f"https://www.duolingo.com/2017-06-30/users?email={quote(email, safe='')}",
+                headers={"User-Agent": DEFAULT_USER_AGENT},
+                timeout=6.0,
+            )
+            if resp.status_code == 200:
+                users = resp.json().get("users") or []
+                if isinstance(users, list) and users:
+                    user = users[0]
+                    uname = user.get("username")
+                    if uname:
+                        _add_hit(
+                            Hit(
+                                target_entity_id=entity.id,
+                                discovered_type=EntityType.USERNAME,
+                                discovered_value=uname,
+                                relation="duolingo_handle",
+                                source_tool="email_intel",
+                                is_trusted=True,
+                                raw_data={"site": "Duolingo", "name": user.get("name", ""), "email": email},
+                                metadata={"username": uname, "name": user.get("name", ""), "site": "Duolingo"},
+                            )
+                        )
+                        duo_url = f"https://www.duolingo.com/profile/{uname}"
+                        _add_hit(
+                            Hit(
+                                target_entity_id=entity.id,
+                                discovered_type=EntityType.PROFILE,
+                                discovered_value=duo_url,
+                                relation="account_on",
+                                source_tool="email_intel",
+                                is_trusted=True,
+                                raw_data={"site": "Duolingo", "name": user.get("name", "")},
+                                metadata={"site": "Duolingo", "url": duo_url, "name": user.get("name", "")},
+                            )
+                        )
+        except (httpx.HTTPError, httpx.TimeoutException, ValueError) as exc:
+            logger.debug("Duolingo lookup failed for %s: %s", email, exc)
+
+    async def _check_pgp_keyservers() -> None:
+        encoded = quote(email, safe="")
+        try:
+            resp = await client.get(
+                f"https://keys.openpgp.org/vks/v1/by-email/{encoded}",
+                headers={"User-Agent": DEFAULT_USER_AGENT},
+                timeout=6.0,
+            )
+            if resp.status_code == 200 and "BEGIN PGP PUBLIC KEY BLOCK" in resp.text:
+                pgp_url = f"https://keys.openpgp.org/search?q={encoded}"
+                _add_hit(
+                    Hit(
+                        target_entity_id=entity.id,
+                        discovered_type=EntityType.PROFILE,
+                        discovered_value=pgp_url,
+                        relation="pgp_key_on",
+                        source_tool="email_intel",
+                        is_trusted=True,
+                        raw_data={"site": "keys.openpgp.org", "email": email},
+                        metadata={"site": "keys.openpgp.org", "url": pgp_url},
+                    )
+                )
+        except (httpx.HTTPError, httpx.TimeoutException):
+            pass
+
+        try:
+            u_resp = await client.get(
+                f"https://keyserver.ubuntu.com/pks/lookup?op=index&options=mr&search={encoded}",
+                headers={"User-Agent": DEFAULT_USER_AGENT},
+                timeout=6.0,
+            )
+            if u_resp.status_code == 200 and "pub:" in u_resp.text:
+                uid_name = ""
+                for line in u_resp.text.splitlines():
+                    if line.startswith("uid:"):
+                        parts = line.split(":")
+                        if len(parts) > 1 and parts[1]:
+                            uid_name = unquote(parts[1])
+                            break
+                ub_url = f"https://keyserver.ubuntu.com/pks/lookup?search={encoded}&op=index"
+                _add_hit(
+                    Hit(
+                        target_entity_id=entity.id,
+                        discovered_type=EntityType.PROFILE,
+                        discovered_value=ub_url,
+                        relation="pgp_key_on",
+                        source_tool="email_intel",
+                        is_trusted=True,
+                        raw_data={"site": "keyserver.ubuntu.com", "uid": uid_name, "email": email},
+                        metadata={"site": "keyserver.ubuntu.com", "url": ub_url, "name": uid_name},
+                    )
+                )
+        except (httpx.HTTPError, httpx.TimeoutException):
+            pass
+
+    await asyncio.gather(
+        _check_gravatar(),
+        _check_github(),
+        _check_xposedornot(),
+        _check_duolingo(),
+        _check_pgp_keyservers(),
+        return_exceptions=True,
+    )
 
     # 3. Run Holehe registration check (with -NP so no password reset emails are sent)
     binary = _find_cli_binary("holehe")
     if not binary:
-        logger.warning("holehe binary is not installed; skipping email registration check.")
+        logger.warning("holehe binary is not installed; skipping holehe email registration check.")
         log_audit_event("tool_unavailable", {"tool": "holehe", "reason": "binary not found on PATH"})
-        return hits
+    else:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    binary,
+                    email,
+                    "--only-used",
+                    "--no-color",
+                    "--no-clear",
+                    "-NP",
+                    "-T",
+                    "5",
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    cwd=tmpdir,
+                )
+                try:
+                    stdout_bytes, _ = await asyncio.wait_for(proc.communicate(), timeout=20.0)
+                except asyncio.TimeoutError:
+                    proc.terminate()
+                    stdout_bytes, _ = await proc.communicate()
+                stdout = stdout_bytes.decode("utf-8", errors="replace")
+                for h in parse_holehe_output(stdout, email, entity.id):
+                    _add_hit(h)
+            except Exception as exc:
+                logger.warning("Holehe execution error for %s: %s", email, exc)
 
-
-
-    with tempfile.TemporaryDirectory() as tmpdir:
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                binary,
-                email,
-                "--only-used",
-                "--no-color",
-                "--no-clear",
-                "-NP",
-                "-T",
-                "5",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                cwd=tmpdir,
+    for h in hits:
+        if h.discovered_type == EntityType.PROFILE:
+            log_audit_event(
+                "profile_discovered",
+                {
+                    "site": h.metadata.get("site", "unknown"),
+                    "url": h.discovered_value,
+                    "username": email,
+                },
             )
-            stdout_bytes, _ = await asyncio.wait_for(proc.communicate(), timeout=30.0)
-            stdout = stdout_bytes.decode("utf-8", errors="replace")
-            for h in parse_holehe_output(stdout, email, entity.id):
-                if h.discovered_value not in seen_values:
-                    seen_values.add(h.discovered_value)
-                    hits.append(h)
-                    log_audit_event(
-                        "profile_discovered",
-                        {
-                            "site": h.metadata.get("site", "unknown"),
-                            "url": h.discovered_value,
-                            "username": email,
-                        },
-                    )
-        except Exception as exc:
-            logger.warning("Holehe execution error for %s: %s", email, exc)
 
     return hits
 

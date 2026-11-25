@@ -22,6 +22,34 @@ _CACHED_SITES: list[tuple[int, str, dict[str, Any]]] | None = None
 _DEAD_HOSTS_CACHE: dict[str, float] | None = None
 _DEAD_HOSTS_TTL_SECONDS = 7 * 24 * 3600  # 7 days
 _DEAD_HOSTS_FILE = Path(".osint_dead_hosts.json")
+_BASELINE_PROBE_USERNAME = "zzqwx991827364nonexistent"
+
+_BOT_CHALLENGE_MARKERS = (
+    "making sure you're not a bot",
+    "making sure you&#39;re not a bot",
+    "/.within.website/",
+    "google.com/recaptcha/challengepage",
+    "cf-browser-verification",
+    "checking your browser before accessing",
+    "<title>just a moment...</title>",
+    "attention required! | cloudflare",
+    "enable javascript and cookies to continue",
+)
+
+_SOFT_404_MARKERS = (
+    "<title>404",
+    "<title>error 404",
+    "<title>page not found",
+    "<title>not found",
+    "<title>user not found",
+    "<title>profile not found",
+    "this page isn't available",
+    "this page is not available",
+    "page doesn't exist",
+    "user does not exist",
+    "account doesn't exist",
+    "no such user",
+)
 
 BROWSER_HEADERS = {
     "User-Agent": (
@@ -139,6 +167,123 @@ def load_maigret_sites() -> list[tuple[int, str, dict[str, Any]]]:
         return []
 
 
+def _is_bot_or_soft404_response(resp: httpx.Response, body: str, ctype: str | None) -> bool:
+    """Detect WAF/bot challenge pages and obvious soft-404 responses returning HTTP 200."""
+    final_url_lower = str(resp.url).lower()
+    if any(marker in final_url_lower for marker in ("/login", "/signin", "authwall", "/.within.website/", "challenge")):
+        return True
+
+    snippet = body[:8192].lower()
+    if any(marker in snippet for marker in _BOT_CHALLENGE_MARKERS):
+        return True
+
+    if ctype in ("status_code", "response_url"):
+        if any(marker in snippet for marker in _SOFT_404_MARKERS):
+            return True
+        if "application/json" in resp.headers.get("content-type", "").lower():
+            stripped = body.strip()
+            if stripped in ("{}", "[]", "null", "") or '"users":{}' in stripped or '"users":[]' in stripped:
+                return True
+
+    return False
+
+
+async def _probe_site(
+    client: httpx.AsyncClient,
+    name: str,
+    cfg: dict[str, Any],
+    probe_username: str,
+    target_id: str,
+    newly_dead: dict[str, float] | None = None,
+) -> Hit | None:
+    """Probe a single site rule for `probe_username` and return a Hit if matched."""
+    probe_tpl = cfg.get("urlProbe") or cfg.get("url")
+    display_tpl = cfg.get("url") or probe_tpl
+    if not probe_tpl or not display_tpl:
+        return None
+
+    probe_url = probe_tpl.replace("{username}", probe_username)
+    display_url = display_tpl.replace("{username}", probe_username)
+    ctype = cfg.get("checkType")
+    host = cfg.get("host") or urlparse(probe_url).netloc.lower()
+
+    try:
+        resp = await client.get(
+            probe_url,
+            follow_redirects=(ctype != "response_url"),
+        )
+        body = resp.text if resp.status_code < 400 else ""
+        if _is_bot_or_soft404_response(resp, body, ctype):
+            return None
+
+        matched = False
+        if ctype == "status_code":
+            matched = resp.status_code == 200
+        elif ctype == "message":
+            if resp.status_code < 400:
+                abs_strs = cfg.get("absenceStrs") or []
+                pres_strs = cfg.get("presenseStrs") or []
+                if not any(s in body for s in abs_strs):
+                    if pres_strs:
+                        matched = any(s in body for s in pres_strs)
+                    elif abs_strs:
+                        matched = True
+        elif ctype == "response_url":
+            matched = 200 <= resp.status_code < 300
+
+        if not matched:
+            return None
+
+        bio = ""
+        location = ""
+        full_name = probe_username
+
+        if "application/json" in resp.headers.get("content-type", "").lower():
+            try:
+                jdata = resp.json()
+                if isinstance(jdata, dict):
+                    full_name = jdata.get("name") or full_name
+                    bio = jdata.get("bio") or jdata.get("company") or ""
+                    location = jdata.get("location") or ""
+            except Exception:
+                pass
+
+        return Hit(
+            target_entity_id=target_id,
+            discovered_type=EntityType.PROFILE,
+            discovered_value=display_url,
+            relation="account_on",
+            source_tool="maigret",
+            is_trusted=False,
+            raw_data={
+                "site": name,
+                "description": bio,
+                "bio": bio,
+                "location": location,
+                "name": full_name,
+                "username": probe_username,
+            },
+            metadata={
+                "username": probe_username,
+                "site": name,
+                "url": display_url,
+                "bio": bio,
+                "location": location,
+                "name": full_name,
+            },
+        )
+    except httpx.ConnectError as exc:
+        err_msg = str(exc).lower()
+        if newly_dead is not None and host and any(
+            msg in err_msg
+            for msg in ("name or service not known", "nodename", "no address associated")
+        ):
+            newly_dead[host] = time.time()
+        return None
+    except Exception:
+        return None
+
+
 async def stream_username_check(
     username: str,
     target_id: str,
@@ -147,7 +292,7 @@ async def stream_username_check(
     overall_timeout: float = 35.0,
     on_hit: Callable[[Hit], None] | None = None,
 ) -> list[Hit]:
-    """Check up to all 10k+ active sites concurrently, pruning dead hosts and streaming hits live."""
+    """Check up to all 10k+ active sites concurrently, pruning dead hosts and catch-all 200 false positives."""
     all_sites = load_maigret_sites()
     if not all_sites:
         return []
@@ -179,99 +324,8 @@ async def stream_username_check(
         logger.info("Skipped %d known dead/unreachable hosts from negative cache.", skipped_dead)
 
     sem = asyncio.Semaphore(concurrency)
-    hits: list[Hit] = []
+    candidates: list[tuple[Hit, str, dict[str, Any]]] = []
     seen_urls: set[str] = set()
-
-    async def check_one(client: httpx.AsyncClient, name: str, cfg: dict[str, Any]) -> Hit | None:
-        probe_tpl = cfg.get("urlProbe") or cfg.get("url")
-        display_tpl = cfg.get("url") or probe_tpl
-        if not probe_tpl or not display_tpl:
-            return None
-
-        probe_url = probe_tpl.replace("{username}", username)
-        display_url = display_tpl.replace("{username}", username)
-        ctype = cfg.get("checkType")
-        host = cfg.get("host") or urlparse(probe_url).netloc.lower()
-
-        async with sem:
-            try:
-                resp = await client.get(
-                    probe_url,
-                    follow_redirects=(ctype != "response_url"),
-                )
-
-                final_url_lower = str(resp.url).lower()
-                if any(marker in final_url_lower for marker in ("/login", "/signin", "authwall")):
-                    return None
-
-                matched = False
-                if ctype == "status_code":
-                    matched = resp.status_code == 200
-                elif ctype == "message":
-                    if resp.status_code < 400:
-                        body = resp.text
-                        abs_strs = cfg.get("absenceStrs") or []
-                        pres_strs = cfg.get("presenseStrs") or []
-                        if not any(s in body for s in abs_strs):
-                            if pres_strs:
-                                matched = any(s in body for s in pres_strs)
-                            elif abs_strs:
-                                matched = True
-                elif ctype == "response_url":
-                    matched = 200 <= resp.status_code < 300
-
-                if not matched:
-                    return None
-
-                bio = ""
-                location = ""
-                full_name = username
-
-                if "application/json" in resp.headers.get("content-type", "").lower():
-                    try:
-                        jdata = resp.json()
-                        if isinstance(jdata, dict):
-                            full_name = jdata.get("name") or full_name
-                            bio = jdata.get("bio") or jdata.get("company") or ""
-                            location = jdata.get("location") or ""
-                    except Exception:
-                        pass
-
-                return Hit(
-                    target_entity_id=target_id,
-                    discovered_type=EntityType.PROFILE,
-                    discovered_value=display_url,
-                    relation="account_on",
-                    source_tool="maigret",
-                    is_trusted=False,
-                    raw_data={
-                        "site": name,
-                        "description": bio,
-                        "bio": bio,
-                        "location": location,
-                        "name": full_name,
-                        "username": username,
-                    },
-                    metadata={
-                        "username": username,
-                        "site": name,
-                        "url": display_url,
-                        "bio": bio,
-                        "location": location,
-                        "name": full_name,
-                    },
-                )
-            except httpx.ConnectError as exc:
-                err_msg = str(exc).lower()
-                # Only blacklist permanently unresolvable DNS hosts (NXDOMAIN), never transient timeouts
-                if host and any(
-                    msg in err_msg
-                    for msg in ("name or service not known", "nodename", "no address associated")
-                ):
-                    newly_dead[host] = time.time()
-                return None
-            except Exception:
-                return None
 
     # Generous 3s connect timeout prevents false drops; 4s read timeout
     timeout_cfg = httpx.Timeout(4.0, connect=3.0)
@@ -288,15 +342,15 @@ async def stream_username_check(
             except asyncio.QueueEmpty:
                 return
             try:
-                hit = await check_one(client, name, cfg)
+                async with sem:
+                    hit = await _probe_site(client, name, cfg, username, target_id, newly_dead)
                 if hit and hit.discovered_value not in seen_urls:
                     seen_urls.add(hit.discovered_value)
-                    hits.append(hit)
-                    if on_hit:
-                        on_hit(hit)
+                    candidates.append((hit, name, cfg))
             finally:
                 queue.task_done()
 
+    verified_hits: list[Hit] = []
     async with httpx.AsyncClient(headers=BROWSER_HEADERS, limits=limits, timeout=timeout_cfg) as client:
         num_workers = min(concurrency, max(1, len(filtered)))
         workers = [asyncio.create_task(worker(client)) for _ in range(num_workers)]
@@ -309,9 +363,26 @@ async def stream_username_check(
                 if not w.done():
                     w.cancel()
 
+        # Baseline false-positive filter: probe each candidate site with a guaranteed-nonexistent username.
+        # Any site that still matches for the nonexistent username returns 200/match for all usernames.
+        if candidates:
+            async def _verify(hit: Hit, name: str, cfg: dict[str, Any]) -> Hit | None:
+                baseline_hit = await _probe_site(client, name, cfg, _BASELINE_PROBE_USERNAME, target_id)
+                if baseline_hit is not None:
+                    logger.debug("Filtered catch-all false positive site %s (%s)", name, hit.discovered_value)
+                    return None
+                return hit
+
+            results = await asyncio.gather(*(_verify(h, n, c) for h, n, c in candidates), return_exceptions=True)
+            for res in results:
+                if isinstance(res, Hit):
+                    verified_hits.append(res)
+                    if on_hit:
+                        on_hit(res)
+
     if newly_dead:
         dead_hosts.update(newly_dead)
         _save_dead_hosts(dead_hosts)
         logger.info("Pruned %d newly unreachable hosts into dead-host cache.", len(newly_dead))
 
-    return hits
+    return verified_hits

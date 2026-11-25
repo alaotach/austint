@@ -696,3 +696,102 @@ async def test_trusted_hit_inherits_parent_confidence_without_decay(tmp_path: Pa
     assert parent_node["confidence"] == 1.0
     # Because sub.parentcorp.org is trusted from crtsh, it inherits parent confidence (1.0) without 0.8 decay
     assert child_node["confidence"] == 1.0
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_tool_email_intel_enrichment() -> None:
+    """email_intel should aggregate GitHub commits/users, XposedOrNot breaches, Gravatar, Duolingo, and PGP."""
+    import hashlib
+    from unittest.mock import patch
+
+    from osint_agent.collectors.tools import collect_email_intel
+
+    email = "alice@gmail.com"
+    md5_hash = hashlib.md5(email.encode("utf-8")).hexdigest()
+
+    respx.get(f"https://en.gravatar.com/{md5_hash}.json").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "entry": [
+                    {
+                        "preferredUsername": "alice_grav",
+                        "displayName": "Alice Smith",
+                        "accounts": [],
+                    }
+                ]
+            },
+        )
+    )
+    respx.get("https://api.github.com/search/commits").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "total_count": 3,
+                "items": [
+                    {
+                        "author": {"login": "alice-gh"},
+                        "commit": {"author": {"name": "Alice Smith"}},
+                        "repository": {"full_name": "alice-gh/demo"},
+                    }
+                ],
+            },
+        )
+    )
+    respx.get("https://api.github.com/search/users").mock(
+        return_value=httpx.Response(200, json={"items": []})
+    )
+    respx.get(f"https://api.xposedornot.com/v1/check-email/{email}").mock(
+        return_value=httpx.Response(200, json={"breaches": [["ExampleBreach"]], "status": "success"})
+    )
+    respx.get("https://www.duolingo.com/2017-06-30/users").mock(
+        return_value=httpx.Response(200, json={"users": [{"username": "alice_duo", "name": "Alice"}]})
+    )
+    respx.get(f"https://keys.openpgp.org/vks/v1/by-email/{email}").mock(return_value=httpx.Response(404))
+    respx.get("https://keyserver.ubuntu.com/pks/lookup").mock(return_value=httpx.Response(404))
+
+    entity = Entity.create(entity_type=EntityType.EMAIL, value=email)
+    with patch("osint_agent.collectors.tools._find_cli_binary", return_value=None):
+        async with httpx.AsyncClient() as client:
+            hits = await collect_email_intel(entity, client)
+
+    values = {h.discovered_value for h in hits}
+    assert "alice_grav" in values
+    assert "alice-gh" in values
+    assert "https://github.com/alice-gh" in values
+    assert "breach:ExampleBreach" in values
+    assert "alice_duo" in values
+
+
+@pytest.mark.asyncio
+async def test_stream_checker_filters_catchall_and_bot_challenge() -> None:
+    """stream_checker must reject Anubis/reCAPTCHA 200 pages and catch-all 200 sites via baseline probing."""
+    from osint_agent.collectors.stream_checker import _BASELINE_PROBE_USERNAME, _is_bot_or_soft404_response, _probe_site
+
+    anubis_resp = httpx.Response(
+        200,
+        request=httpx.Request("GET", "https://lemmy.rochegmr.com/u/testuser"),
+        text="<html><head><title>Making sure you&#39;re not a bot!</title></head></html>",
+    )
+    assert _is_bot_or_soft404_response(anubis_resp, anubis_resp.text, "status_code") is True
+
+    soft404_resp = httpx.Response(
+        200,
+        request=httpx.Request("GET", "https://example.com/u/testuser"),
+        text="<html><head><title>User Not Found</title></head><body>No such user</body></html>",
+    )
+    assert _is_bot_or_soft404_response(soft404_resp, soft404_resp.text, "status_code") is True
+
+    # Simulate a catch-all 200 site: both real username and baseline nonexistent username return 200
+    with respx.mock(assert_all_called=False) as mock:
+        mock.get("https://catchall.example/u/realuser").mock(return_value=httpx.Response(200, text="<html>Profile</html>"))
+        mock.get(f"https://catchall.example/u/{_BASELINE_PROBE_USERNAME}").mock(
+            return_value=httpx.Response(200, text="<html>Profile</html>")
+        )
+        cfg = {"url": "https://catchall.example/u/{username}", "urlProbe": "https://catchall.example/u/{username}", "checkType": "status_code"}
+        async with httpx.AsyncClient() as client:
+            real_hit = await _probe_site(client, "CatchAll", cfg, "realuser", "username:realuser")
+            base_hit = await _probe_site(client, "CatchAll", cfg, _BASELINE_PROBE_USERNAME, "username:realuser")
+        assert real_hit is not None
+        assert base_hit is not None  # Baseline matches -> stream_username_check drops it as catch-all 200
