@@ -445,6 +445,54 @@ async def test_tool_email_intel_collector() -> None:
 
 @pytest.mark.asyncio
 @respx.mock
+async def test_tool_web_archive_crawl_collector() -> None:
+    """web_archive_crawl should query Wayback CDX, sitemap.xml, mailto emails, and social links."""
+    from osint_agent.collectors.tools import collect_web_archive_crawl
+
+    respx.get("https://web.archive.org/cdx/search/cdx").mock(
+        return_value=httpx.Response(
+            200,
+            json=[
+                ["timestamp", "original", "statuscode"],
+                ["20240101120000", "https://mocklab.org/", "200"],
+                ["20240201120000", "https://mocklab.org/about", "200"],
+            ],
+        )
+    )
+    respx.get("https://mocklab.org/robots.txt").mock(
+        return_value=httpx.Response(200, text="User-agent: *\nAllow: /")
+    )
+    respx.get("https://mocklab.org/sitemap.xml").mock(
+        return_value=httpx.Response(
+            200,
+            text="<urlset><url><loc>https://mocklab.org/projects</loc></url></urlset>",
+        )
+    )
+    respx.get("https://mocklab.org").mock(
+        return_value=httpx.Response(
+            200,
+            headers={"content-type": "text/html"},
+            text="""
+            <html><body>
+              <a href="mailto:hello@mocklab.org">Email</a>
+              <a href="https://github.com/mocklab">GitHub</a>
+            </body></html>
+            """,
+        )
+    )
+
+    domain_entity = Entity.create(entity_type=EntityType.DOMAIN, value="mocklab.org")
+    async with httpx.AsyncClient() as client:
+        hits = await collect_web_archive_crawl(domain_entity, client)
+
+    values = [h.discovered_value for h in hits]
+    assert "hello@mocklab.org" in values
+    assert "https://github.com/mocklab" in values
+    assert "https://web.archive.org/web/*/mocklab.org" in values
+
+
+@pytest.mark.asyncio
+@respx.mock
 async def test_cli_execution_with_consent(tmp_path: Path) -> None:
     """CLI runner should successfully execute and write graph and audit files."""
     from osint_agent.cli import main_async, parse_args

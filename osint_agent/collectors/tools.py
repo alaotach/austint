@@ -1055,3 +1055,141 @@ async def collect_email_intel(entity: Entity, client: httpx.AsyncClient) -> list
             logger.warning("Holehe execution error for %s: %s", email, exc)
 
     return hits
+
+
+@register_tool(
+    name="web_archive_crawl",
+    target_types=[EntityType.DOMAIN],
+    description="Queries Wayback Machine CDX archives, sitemap.xml, and outbound social/email links on a domain.",
+)
+async def collect_web_archive_crawl(entity: Entity, client: httpx.AsyncClient) -> list[Hit]:
+    """Query Internet Archive Wayback CDX API and politely crawl homepage/sitemap links."""
+    if entity.depth > 0 and any(
+        tag in p for p in entity.provenance for tag in ("nameserver_for", "mail_server_for")
+    ):
+        return []
+
+    domain = _normalize_domain(entity.value)
+    if domain.count(".") > 1 and entity.depth > 0:
+        return []
+
+    from urllib.parse import urlparse
+
+    from osint_agent.collectors.enrich import can_fetch_robots, is_private_or_loopback_host
+    from osint_agent.collectors.profile_analyzer import SOCIAL_LINK_PATTERN
+
+    if is_private_or_loopback_host(domain):
+        return []
+
+    hits: list[Hit] = []
+    seen_values: set[str] = set()
+    wayback_urls: list[str] = []
+
+    # 1. Query Wayback Machine CDX API (historical snapshots & endpoints)
+    try:
+        cdx_resp = await client.get(
+            "https://web.archive.org/cdx/search/cdx",
+            params={
+                "url": domain,
+                "matchType": "prefix",
+                "output": "json",
+                "limit": "10",
+                "collapse": "urlkey",
+                "fl": "timestamp,original,statuscode",
+            },
+            headers={"User-Agent": DEFAULT_USER_AGENT},
+            timeout=6.0,
+        )
+        if cdx_resp.status_code == 200:
+            rows = cdx_resp.json()
+            if isinstance(rows, list) and len(rows) > 1:
+                for row in rows[1:]:
+                    if isinstance(row, list) and len(row) >= 2:
+                        wayback_urls.append(f"{row[1]} ({str(row[0])[:8]})")
+    except Exception as exc:
+        logger.debug("Wayback CDX skipped/failed for %s: %s", domain, exc)
+
+    # 2. Polite web crawl: check robots.txt, sitemap.xml, and homepage social/mailto links
+    base_url = f"https://{domain}"
+    sitemap_urls: list[str] = []
+    try:
+        if await can_fetch_robots(client, urlparse(base_url)):
+            # Sitemap discovery
+            sm_resp = await client.get(
+                f"{base_url}/sitemap.xml",
+                headers={"User-Agent": DEFAULT_USER_AGENT},
+                follow_redirects=True,
+                timeout=4.0,
+            )
+            if sm_resp.status_code == 200 and "<loc>" in sm_resp.text:
+                sitemap_urls = re.findall(r"<loc>\s*(https?://[^<\s]+)\s*</loc>", sm_resp.text[:100_000])[:10]
+
+            # Homepage link & mailto extraction
+            home_resp = await client.get(
+                base_url,
+                headers={"User-Agent": DEFAULT_USER_AGENT},
+                follow_redirects=True,
+                timeout=5.0,
+            )
+            if home_resp.status_code == 200 and "text/html" in home_resp.headers.get("content-type", "").lower():
+                html = home_resp.text[:200_000]
+
+                # Mailto emails
+                for email_match in re.findall(r'mailto:([a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+)', html):
+                    clean_email = email_match.strip().lower()
+                    if clean_email not in seen_values:
+                        seen_values.add(clean_email)
+                        hits.append(
+                            Hit(
+                                target_entity_id=entity.id,
+                                discovered_type=EntityType.EMAIL,
+                                discovered_value=clean_email,
+                                relation="contact_on_site",
+                                source_tool="web_archive_crawl",
+                                is_trusted=True,
+                                raw_data={"domain": domain},
+                                metadata={"source_url": str(home_resp.url)},
+                            )
+                        )
+
+                # Outbound social profile links
+                for soc_url in SOCIAL_LINK_PATTERN.findall(html)[:10]:
+                    if soc_url not in seen_values:
+                        seen_values.add(soc_url)
+                        hits.append(
+                            Hit(
+                                target_entity_id=entity.id,
+                                discovered_type=EntityType.PROFILE,
+                                discovered_value=soc_url,
+                                relation="linked_from_site",
+                                source_tool="web_archive_crawl",
+                                is_trusted=True,
+                                raw_data={"domain": domain},
+                                metadata={"url": soc_url},
+                            )
+                        )
+    except Exception as exc:
+        logger.debug("Web crawl skipped/failed for %s: %s", domain, exc)
+
+    if wayback_urls or sitemap_urls:
+        hits.append(
+            Hit(
+                target_entity_id=entity.id,
+                discovered_type=EntityType.PROFILE,
+                discovered_value=f"https://web.archive.org/web/*/{domain}",
+                relation="archived_in",
+                source_tool="web_archive_crawl",
+                is_trusted=True,
+                raw_data={
+                    "wayback_snapshots": wayback_urls,
+                    "sitemap_urls": sitemap_urls,
+                    "description": f"Wayback snapshots: {len(wayback_urls)} | Sitemap URLs: {len(sitemap_urls)}",
+                },
+                metadata={
+                    "wayback_count": len(wayback_urls),
+                    "sitemap_count": len(sitemap_urls),
+                },
+            )
+        )
+
+    return hits
