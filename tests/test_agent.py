@@ -1293,3 +1293,158 @@ async def test_tool_email_intel_hudson_rock_infostealer() -> None:
     assert sh.raw_data["computer_name"] == "LAPTOP-VICTIM (VictimUser)"
     assert sh.source_tool == "email_intel"
     assert "stealer_victim@test.com" in sh.discovered_value or "infostealer" in sh.discovered_value
+
+
+# ---------------------------------------------------------------------------
+# LLM client resilience tests: 429 backoff, empty body, truncated JSON repair
+# ---------------------------------------------------------------------------
+
+
+def test_repair_truncated_json_basic() -> None:
+    """_repair_truncated_json should close open strings and braces."""
+    from osint_agent.llm.client import _repair_truncated_json
+
+    # Truncated mid-string
+    truncated = '{"name": "Alice", "bio": "Developer at Acme'
+    repaired = _repair_truncated_json(truncated)
+    parsed = json.loads(repaired)
+    assert parsed["name"] == "Alice"
+
+    # Truncated before closing brace
+    truncated2 = '{"key": "value"'
+    repaired2 = _repair_truncated_json(truncated2)
+    parsed2 = json.loads(repaired2)
+    assert parsed2["key"] == "value"
+
+    # Nested truncation
+    truncated3 = '{"a": {"b": "hello'
+    repaired3 = _repair_truncated_json(truncated3)
+    parsed3 = json.loads(repaired3)
+    assert parsed3["a"]["b"] == "hello"
+
+    # Already valid — should parse fine
+    valid = '{"x": 1}'
+    assert json.loads(_repair_truncated_json(valid)) == {"x": 1}
+
+
+def test_parse_payload_repairs_truncated_json() -> None:
+    """_parse_payload should auto-repair truncated JSON instead of raising."""
+    from osint_agent.llm.client import BaseClient
+
+    class _ConcreteClient(BaseClient):
+        pass
+
+    client = _ConcreteClient(call_budget=5)
+    # Simulate LLM truncating mid-string
+    truncated_raw = '{"real_name": "Bob Smith", "location": "Mumbai'
+    result = client._parse_payload(truncated_raw, token_count=50)
+    assert result["real_name"] == "Bob Smith"
+    assert client.calls_made == 1
+
+
+def test_parse_payload_raises_on_truly_empty() -> None:
+    """_parse_payload should raise ValueError on empty body, not silently return."""
+    from osint_agent.llm.client import BaseClient
+
+    class _ConcreteClient(BaseClient):
+        pass
+
+    client = _ConcreteClient(call_budget=5)
+    with pytest.raises(ValueError, match="empty response body"):
+        client._parse_payload("", token_count=0)
+
+    # Whitespace-only also counts as empty
+    with pytest.raises(ValueError, match="empty response body"):
+        client._parse_payload("   \n  ", token_count=0)
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_openrouter_client_429_retries_with_backoff() -> None:
+    """OpenRouterClient should retry on 429 and eventually succeed on 3rd attempt."""
+    import time as _time
+    from unittest.mock import patch
+    from osint_agent.llm.client import OpenRouterClient
+
+    call_count = 0
+
+    def side_effect(request):
+        nonlocal call_count
+        call_count += 1
+        if call_count <= 2:
+            return httpx.Response(429, headers={"Retry-After": "0"}, json={"error": "rate limited"})
+        return httpx.Response(
+            200,
+            json={
+                "choices": [{"message": {"content": '{"status": "ok"}'}}],
+                "usage": {"total_tokens": 10},
+            },
+        )
+
+    respx.post("https://ai.hackclub.com/proxy/v1/chat/completions").mock(side_effect=side_effect)
+
+    client = OpenRouterClient(api_key="test-key", call_budget=5)
+    # Patch sleep to avoid actually waiting in tests
+    with patch("osint_agent.llm.client.time.sleep"):
+        res = client.complete_json(system="sys", user="usr", max_tokens=100)
+
+    assert res["status"] == "ok"
+    assert call_count == 3
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_openrouter_client_empty_body_retries() -> None:
+    """OpenRouterClient should retry when LLM returns empty content body."""
+    from unittest.mock import patch
+    from osint_agent.llm.client import OpenRouterClient
+
+    call_count = 0
+
+    def side_effect(request):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            # Empty content
+            return httpx.Response(
+                200,
+                json={"choices": [{"message": {"content": ""}}], "usage": {"total_tokens": 5}},
+            )
+        return httpx.Response(
+            200,
+            json={
+                "choices": [{"message": {"content": '{"answer": "yes"}'}}],
+                "usage": {"total_tokens": 10},
+            },
+        )
+
+    respx.post("https://ai.hackclub.com/proxy/v1/chat/completions").mock(side_effect=side_effect)
+
+    client = OpenRouterClient(api_key="test-key", call_budget=5)
+    with patch("osint_agent.llm.client.time.sleep"):
+        res = client.complete_json(system="sys", user="usr", max_tokens=100)
+
+    assert res["answer"] == "yes"
+    assert call_count == 2
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_openrouter_client_truncated_json_repaired() -> None:
+    """OpenRouterClient should auto-repair truncated JSON from LLM and return valid result."""
+    from osint_agent.llm.client import OpenRouterClient
+
+    respx.post("https://ai.hackclub.com/proxy/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "choices": [{"message": {"content": '{"real_name": "Eve", "location": "London'}}],
+                "usage": {"total_tokens": 20},
+            },
+        )
+    )
+
+    client = OpenRouterClient(api_key="test-key", call_budget=5)
+    res = client.complete_json(system="sys", user="usr", max_tokens=100)
+    assert res["real_name"] == "Eve"
+    assert res["location"] == "London"

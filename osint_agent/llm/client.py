@@ -6,12 +6,63 @@ import json
 import logging
 import os
 import re
+import time
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
 import httpx
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Truncated-JSON auto-repair
+# ---------------------------------------------------------------------------
+
+def _repair_truncated_json(text: str) -> str:
+    """Best-effort repair of a truncated JSON object by closing open strings and braces.
+
+    Only called after a primary parse failure to give a second chance. Returns
+    the input unchanged if the heuristic cannot produce valid JSON.
+    """
+    t = text.strip()
+    if not t:
+        return t
+
+    # Count unclosed structural characters
+    # Walk through respecting string escaping
+    in_string = False
+    escape_next = False
+    stack: list[str] = []  # '{' or '['
+
+    for ch in t:
+        if escape_next:
+            escape_next = False
+            continue
+        if ch == "\\" and in_string:
+            escape_next = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if ch in ("{", "["):
+            stack.append(ch)
+        elif ch in ("}", "]"):
+            if stack:
+                stack.pop()
+
+    close_map = {"{": "}", "[": "]"}
+    # If we're mid-string, close it first
+    if in_string:
+        t += '"'
+    # Close any trailing comma before closing braces
+    t = re.sub(r",\s*$", "", t.rstrip())
+    # Close open structural elements in reverse order
+    for opener in reversed(stack):
+        t += close_map[opener]
+
+    return t
 
 
 def _load_dotenv() -> None:
@@ -87,19 +138,32 @@ class BaseClient:
 
     def _parse_payload(self, raw_text: str, token_count: int) -> LLMResult:
         cleaned = strip_code_fences(raw_text)
+
+        if not cleaned:
+            raise ValueError("Failed to decode JSON from LLM: empty response body")
+
+        # Pass 1: direct parse
         try:
             parsed = json.loads(cleaned)
-        except json.JSONDecodeError as exc:
-            # Fallback: extract first balanced-ish {...} JSON object if wrapped in prose
+        except json.JSONDecodeError as exc_primary:
+            # Pass 2: extract first {...} block if wrapped in prose
             start = cleaned.find("{")
             end = cleaned.rfind("}")
+            parsed = None
             if start != -1 and end > start:
                 try:
                     parsed = json.loads(cleaned[start : end + 1])
                 except json.JSONDecodeError:
-                    raise ValueError(f"Failed to decode JSON from LLM: {exc}") from exc
-            else:
-                raise ValueError(f"Failed to decode JSON from LLM: {exc}") from exc
+                    pass
+
+            # Pass 3: auto-repair truncated JSON (handles unterminated strings / missing braces)
+            if parsed is None:
+                candidate = _repair_truncated_json(cleaned if start == -1 else cleaned[start:])
+                try:
+                    parsed = json.loads(candidate)
+                    logger.info("JSON auto-repair succeeded (%d chars repaired)", len(candidate) - len(cleaned))
+                except json.JSONDecodeError:
+                    raise ValueError(f"Failed to decode JSON from LLM: {exc_primary}") from exc_primary
 
         if not isinstance(parsed, dict):
             raise ValueError(f"Expected JSON object, got {type(parsed).__name__}")
@@ -146,6 +210,11 @@ class AnthropicClient(BaseClient):
             try:
                 with httpx.Client(timeout=self.timeout) as client:
                     resp = client.post(url, json=payload, headers=headers)
+                    if resp.status_code == 429:
+                        wait = int(resp.headers.get("Retry-After", 15))
+                        logger.warning("Anthropic 429 rate-limited. Waiting %ds.", wait)
+                        time.sleep(wait)
+                        continue
                     resp.raise_for_status()
                     data = resp.json()
                     raw_text = "".join(
@@ -157,6 +226,8 @@ class AnthropicClient(BaseClient):
             except Exception as exc:
                 last_exc = exc
                 logger.warning("Anthropic request attempt %d failed: %s", attempt + 1, exc)
+                if attempt == 0:
+                    time.sleep(2)
 
         raise RuntimeError(f"Anthropic completion failed after 1 retry: {last_exc}") from last_exc
 
@@ -195,6 +266,11 @@ class GeminiClient(BaseClient):
             try:
                 with httpx.Client(timeout=self.timeout) as client:
                     resp = client.post(url, json=payload)
+                    if resp.status_code == 429:
+                        wait = int(resp.headers.get("Retry-After", 15))
+                        logger.warning("Gemini 429 rate-limited. Waiting %ds.", wait)
+                        time.sleep(wait)
+                        continue
                     resp.raise_for_status()
                     data = resp.json()
                     candidates = data.get("candidates", [])
@@ -208,6 +284,8 @@ class GeminiClient(BaseClient):
             except Exception as exc:
                 last_exc = exc
                 logger.warning("Gemini request attempt %d failed: %s", attempt + 1, exc)
+                if attempt == 0:
+                    time.sleep(2)
 
         raise RuntimeError(f"Gemini completion failed after 1 retry: {last_exc}") from last_exc
 
@@ -302,26 +380,67 @@ class OpenRouterClient(BaseClient):
             ],
         }
 
+        # Retry schedule: (delay_before_attempt_seconds, is_this_a_retry)
+        # Attempts: 0s → 3s → 8s  (3 total attempts)
+        _RETRY_DELAYS = [0, 3, 8]
+        _MAX_ATTEMPTS = len(_RETRY_DELAYS)
+
         last_exc: Exception | None = None
-        for attempt in range(2):
+        for attempt, delay in enumerate(_RETRY_DELAYS):
+            if delay > 0:
+                time.sleep(delay)
             try:
                 with httpx.Client(timeout=self.timeout) as client:
                     resp = client.post(self.base_url, json=payload, headers=headers)
+
+                    # 429 rate-limit: respect Retry-After header or back off longer
+                    if resp.status_code == 429:
+                        retry_after = int(resp.headers.get("Retry-After", 0))
+                        wait = max(retry_after, 10 + attempt * 5)  # min 10s, grows per attempt
+                        logger.warning(
+                            "OpenRouter 429 rate-limited (attempt %d/%d). Waiting %ds before retry.",
+                            attempt + 1, _MAX_ATTEMPTS, wait,
+                        )
+                        last_exc = httpx.HTTPStatusError(
+                            f"429 Too Many Requests",
+                            request=resp.request,
+                            response=resp,
+                        )
+                        if attempt < _MAX_ATTEMPTS - 1:
+                            time.sleep(wait)
+                        continue
+
+                    # Other HTTP errors
                     resp.raise_for_status()
+
                     data = resp.json()
                     choices = data.get("choices") or []
                     raw_text = ""
                     if choices:
                         msg = choices[0].get("message") or {}
                         raw_text = str(msg.get("content") or "")
-                    usage = data.get("usage") or {}
-                    token_count = int(usage.get("total_tokens") or (usage.get("prompt_tokens", 0) + usage.get("completion_tokens", 0)))
-                    return self._parse_payload(raw_text, token_count)
-            except Exception as exc:
-                last_exc = exc
-                logger.warning("OpenRouter request attempt %d failed: %s", attempt + 1, exc)
 
-        raise RuntimeError(f"OpenRouter completion failed after 1 retry: {last_exc}") from last_exc
+                    # Detect empty body early with a clear message
+                    if not raw_text.strip():
+                        raise ValueError("LLM returned empty content body — model may have refused or timed out")
+
+                    usage = data.get("usage") or {}
+                    token_count = int(
+                        usage.get("total_tokens")
+                        or (usage.get("prompt_tokens", 0) + usage.get("completion_tokens", 0))
+                    )
+                    return self._parse_payload(raw_text, token_count)
+
+            except (httpx.HTTPStatusError, httpx.RequestError, httpx.TimeoutException, ValueError) as exc:
+                last_exc = exc
+                logger.warning(
+                    "OpenRouter request attempt %d/%d failed: %s",
+                    attempt + 1, _MAX_ATTEMPTS, exc,
+                )
+
+        raise RuntimeError(
+            f"OpenRouter completion failed after {_MAX_ATTEMPTS} attempts: {last_exc}"
+        ) from last_exc
 
 
 def get_llm_client(provider: str | None = None, call_budget: int = 20) -> LLMClient:

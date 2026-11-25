@@ -946,7 +946,7 @@ async def synthesize_profile_relations(graph: Any, llm_client: Any = None) -> di
     )
 
     try:
-        result = await asyncio.to_thread(active_llm.complete_json, system, user, 900)
+        result = await asyncio.to_thread(active_llm.complete_json, system, user, 1600)
         if not isinstance(result, dict):
             return None
 
