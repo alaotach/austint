@@ -227,13 +227,74 @@ async def collect_domain_intel(entity: Entity, client: httpx.AsyncClient) -> lis
     hits: list[Hit] = []
     seen_values: set[str] = set()
 
-    # 1. Resolve DNS A-records (IPv4) non-blockingly
+    # 1. Resolve DNS A, MX, NS, and TXT records via dnspython (with socket fallback)
     ips: list[str] = []
+    mx_hosts: list[str] = []
+    txt_records: list[str] = []
     try:
-        import socket
-        _, _, ips = await asyncio.to_thread(socket.gethostbyname_ex, domain)
+        import dns.resolver  # type: ignore
+
+        def _query_dns_sync() -> tuple[list[str], list[str], list[str]]:
+            a_list, mx_list, txt_list = [], [], []
+            res = dns.resolver.Resolver()
+            res.lifetime = 3.0
+            try:
+                a_list = [str(r) for r in res.resolve(domain, "A")]
+            except Exception:
+                pass
+            try:
+                mx_list = [str(r.exchange).rstrip(".").lower() for r in res.resolve(domain, "MX")]
+            except Exception:
+                pass
+            try:
+                txt_list = [str(r).strip('"') for r in res.resolve(domain, "TXT")]
+            except Exception:
+                pass
+            return a_list, mx_list, txt_list
+
+        ips, mx_hosts, txt_records = await asyncio.to_thread(_query_dns_sync)
     except Exception:
         pass
+
+    if not ips:
+        try:
+            import socket
+            _, _, ips = await asyncio.to_thread(socket.gethostbyname_ex, domain)
+        except Exception:
+            pass
+
+    for mx in mx_hosts[:3]:
+        if mx and mx not in seen_values:
+            seen_values.add(mx)
+            hits.append(
+                Hit(
+                    target_entity_id=entity.id,
+                    discovered_type=EntityType.DOMAIN,
+                    discovered_value=mx,
+                    relation="mail_server_for",
+                    source_tool="domain_intel",
+                    is_trusted=True,
+                    raw_data={"parent_domain": domain},
+                    metadata={"is_nameserver": True},
+                )
+            )
+
+    # 1b. Query Shodan InternetDB (free, keyless) for open ports & CVEs on first IP
+    shodan_ports: list[int] = []
+    shodan_vulns: list[str] = []
+    if ips and domain.count(".") == 1:
+        try:
+            shodan_resp = await client.get(
+                f"https://internetdb.shodan.io/{ips[0]}",
+                headers={"User-Agent": DEFAULT_USER_AGENT},
+                timeout=3.0,
+            )
+            if shodan_resp.status_code == 200:
+                sdata = shodan_resp.json()
+                shodan_ports = list(sdata.get("ports") or [])
+                shodan_vulns = list(sdata.get("vulns") or [])
+        except Exception:
+            pass
 
     # 2. Query RDAP for registrar, nameservers, and registration dates (root domains only)
     reg_date = ""
@@ -341,10 +402,27 @@ async def collect_domain_intel(entity: Entity, client: httpx.AsyncClient) -> lis
                     )
                 )
 
-        # Parse homepage HTML metadata for lead extraction
+        # Parse homepage HTML metadata & tech stack fingerprints
         content_type = web_resp.headers.get("content-type", "").lower()
+        tech_stack: list[str] = []
         if "text/html" in content_type and web_resp.text:
-            meta_dict = parse_html_metadata(web_resp.text[:200_000])
+            html_head = web_resp.text[:200_000]
+            html_lower = html_head.lower()
+            tech_signatures = [
+                ("Next.js", "/_next/static"),
+                ("React", "data-reactroot"),
+                ("Vite", "/assets/index-"),
+                ("WordPress", "wp-content/"),
+                ("Tailwind CSS", "tailwindcss"),
+                ("Google Analytics", "googletagmanager.com/gtag"),
+                ("Stripe", "js.stripe.com"),
+                ("Cloudflare Turnstile", "challenges.cloudflare.com/turnstile"),
+            ]
+            for tech_name, marker in tech_signatures:
+                if marker in html_lower:
+                    tech_stack.append(tech_name)
+
+            meta_dict = parse_html_metadata(html_head)
             summary_parts = []
             if isinstance(meta_dict, dict):
                 if meta_dict.get("title"):
@@ -355,6 +433,14 @@ async def collect_domain_intel(entity: Entity, client: httpx.AsyncClient) -> lis
                 summary_parts.append(meta_dict)
             if ips:
                 summary_parts.append(f"IPs: {', '.join(ips)}")
+            if shodan_ports:
+                summary_parts.append(f"Open Ports: {', '.join(str(p) for p in shodan_ports)}")
+            if shodan_vulns:
+                summary_parts.append(f"CVEs: {', '.join(shodan_vulns[:5])}")
+            if tech_stack:
+                summary_parts.append(f"Tech: {', '.join(tech_stack)}")
+            if txt_records:
+                summary_parts.append(f"TXT: {' ; '.join(txt_records[:3])}")
             if reg_date:
                 summary_parts.append(f"Registered: {reg_date}")
             if exp_date:
@@ -371,11 +457,21 @@ async def collect_domain_intel(entity: Entity, client: httpx.AsyncClient) -> lis
                     raw_data={
                         "description": " | ".join(summary_parts),
                         "ips": ips,
+                        "ports": shodan_ports,
+                        "vulns": shodan_vulns,
+                        "tech_stack": tech_stack,
+                        "txt_records": txt_records,
                         "registered": reg_date,
                         "expires": exp_date,
                         "server": server_hdr,
                     },
-                    metadata={"domain": domain, "url": str(web_resp.url)},
+                    metadata={
+                        "domain": domain,
+                        "url": str(web_resp.url),
+                        "ips": ", ".join(ips),
+                        "tech_stack": ", ".join(tech_stack),
+                        "ports": ", ".join(str(p) for p in shodan_ports),
+                    },
                 )
             )
     except (httpx.HTTPError, httpx.TimeoutException, ValueError) as exc:
