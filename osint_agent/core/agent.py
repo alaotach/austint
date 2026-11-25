@@ -19,7 +19,7 @@ from osint_agent.collectors.profile_analyzer import analyze_profiles_batch, synt
 from osint_agent.ml.profile_matcher import discover_ml_profile_relations
 from osint_agent.llm.planner import Planner, RuleBasedPlanner
 from osint_agent.ml.resolver import BaseResolver, BaselineWeightedResolver
-from osint_agent.core.schema import Entity, EntityType, Scope
+from osint_agent.core.schema import Entity, EntityType, Hit, Scope
 from osint_agent.collectors.tools import TOOL_REGISTRY, set_audit_callback
 
 logger = logging.getLogger(__name__)

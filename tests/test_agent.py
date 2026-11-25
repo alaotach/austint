@@ -1677,3 +1677,78 @@ async def test_profile_analyzer_generic_html_strips_boilerplate_and_extracts_ext
     assert hit.metadata["extra_fields"]["university"] == "IIT Delhi"
     assert hit.metadata["extra_fields"]["role"] == "Founder at EryzaLabs"
     assert "https://example-portfolio.dev/photo.jpg" in hit.metadata.get("images", [])
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_agent_run_follows_high_value_linked_profile_urls() -> None:
+    """OSINTAgent.run must follow high-value linked_urls (e.g. Play Store app) without NameError on Hit."""
+    from unittest.mock import AsyncMock, patch
+    from osint_agent.collectors.tools import TOOL_REGISTRY, ToolDefinition
+    from osint_agent.core.agent import OSINTAgent
+
+    app_url = "https://play.google.com/store/apps/details?id=com.alaotach.eli5&hl=en"
+    respx.get(app_url).mock(
+        return_value=httpx.Response(
+            200,
+            text=(
+                '<html><body><h1><span itemprop="name">ELI5</span></h1>'
+                '<div class="Bne0R ">About the developer</div><div class="HhKIQc">'
+                '<div>Aryan Mishra</div><div>aryanmi2001@gmail.com</div>'
+                '<div class="mHsyY">Koraon, Uttar Pradesh 212306 India</div>'
+                '</div></div></div></section></body></html>'
+            ),
+        )
+    )
+
+    async def fake_repo_collector(entity: Entity, client: httpx.AsyncClient) -> list[Hit]:
+        return [
+            Hit(
+                target_entity_id=entity.id,
+                discovered_type=EntityType.PROFILE,
+                discovered_value="https://github.com/alaotach/eli-new",
+                relation="authored_repo",
+                source_tool="github_code_intel",
+                is_trusted=True,
+                metadata={"url": "https://github.com/alaotach/eli-new", "linked_urls": [app_url]},
+            )
+        ]
+
+    respx.get("https://api.github.com/repos/alaotach/eli-new").mock(return_value=httpx.Response(404))
+    respx.get("https://api.github.com/repos/alaotach/eli-new/readme").mock(return_value=httpx.Response(404))
+    respx.get("https://api.github.com/repos/alaotach/eli-new/commits?per_page=10").mock(return_value=httpx.Response(404))
+    respx.get("https://api.github.com/repos/alaotach/eli-new/contents").mock(return_value=httpx.Response(404))
+    respx.get("https://api.github.com/repos/alaotach/eli-new/git/trees/HEAD?recursive=1").mock(return_value=httpx.Response(404))
+
+    orig_tool = TOOL_REGISTRY.get("github_code_intel")
+    TOOL_REGISTRY["github_code_intel"] = ToolDefinition(
+        name="github_code_intel",
+        description="mock",
+        target_types=[EntityType.USERNAME],
+        func=fake_repo_collector,
+    )
+
+    from osint_agent.llm.planner import PlanStep
+
+    class _SingleToolPlanner:
+        def plan(self, entity, graph_summary, remaining_budget):
+            return [PlanStep(tool_name="github_code_intel", reason="test")]
+
+    try:
+        agent = OSINTAgent(planner=_SingleToolPlanner())
+        scope = Scope(
+            target_kind=EntityType.USERNAME,
+            target_value="alaotach",
+            consent_confirmed=True,
+            max_depth=1,
+            max_tool_calls=1,
+        )
+        graph = await agent.run(scope)
+    finally:
+        if orig_tool is not None:
+            TOOL_REGISTRY["github_code_intel"] = orig_tool
+
+    assert f"profile:{app_url}" in graph.nodes
+    attrs = graph.nodes[f"profile:{app_url}"]["attributes"]
+    assert attrs["name"] == "Aryan Mishra"
+    assert "Koraon, Uttar Pradesh 212306" in attrs["location"]
