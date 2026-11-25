@@ -398,6 +398,53 @@ async def test_tool_domain_intel_collector() -> None:
 
 @pytest.mark.asyncio
 @respx.mock
+async def test_tool_email_intel_collector() -> None:
+    """email_intel should link custom domain, parse Gravatar profile, and parse Holehe stdout."""
+    import hashlib
+    from unittest.mock import AsyncMock, patch
+    from osint_agent.collectors.tools import collect_email_intel
+
+    email = "alice@acme-research.io"
+    email_hash = hashlib.md5(email.encode("utf-8")).hexdigest()
+
+    respx.get(f"https://en.gravatar.com/{email_hash}.json").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "entry": [
+                    {
+                        "preferredUsername": "alice_dev",
+                        "displayName": "Alice Researcher",
+                        "aboutMe": "ML Scientist",
+                        "currentLocation": "Zurich",
+                        "accounts": [{"shortname": "github", "url": "https://github.com/alice_dev"}],
+                    }
+                ]
+            },
+        )
+    )
+
+    holehe_stdout = "\n[+] Email used, [-] Email not used, [x] Rate limit\n[+] spotify.com\n[+] github.com\n"
+    with patch("osint_agent.collectors.tools._find_cli_binary", return_value="/usr/bin/holehe"), \
+         patch("asyncio.create_subprocess_exec") as mock_exec:
+        mock_proc = AsyncMock()
+        mock_proc.communicate.return_value = (holehe_stdout.encode("utf-8"), b"")
+        mock_exec.return_value = mock_proc
+
+        email_entity = Entity.create(entity_type=EntityType.EMAIL, value=email)
+        async with httpx.AsyncClient() as client:
+            hits = await collect_email_intel(email_entity, client)
+
+    values = [h.discovered_value for h in hits]
+    assert "acme-research.io" in values
+    assert "alice_dev" in values
+    assert "https://github.com/alice_dev" in values
+    assert "https://spotify.com" in values
+    assert "https://github.com" in values
+
+
+@pytest.mark.asyncio
+@respx.mock
 async def test_cli_execution_with_consent(tmp_path: Path) -> None:
     """CLI runner should successfully execute and write graph and audit files."""
     from osint_agent.cli import main_async, parse_args

@@ -788,3 +788,174 @@ async def collect_maigret(entity: Entity, client: httpx.AsyncClient) -> list[Hit
         except Exception as exc:
             logger.warning("Maigret execution error for %s: %s", username, exc)
             return []
+
+
+FREE_EMAIL_PROVIDERS = {
+    "gmail.com", "yahoo.com", "outlook.com", "hotmail.com", "live.com",
+    "icloud.com", "me.com", "proton.me", "protonmail.com", "aol.com",
+    "zoho.com", "yandex.com", "mail.com", "gmx.com", "tutanota.com",
+}
+
+
+def parse_holehe_output(stdout: str, email: str, target_id: str) -> list[Hit]:
+    """Parse Holehe --only-used stdout lines into normalized PROFILE Hits."""
+    hits: list[Hit] = []
+    seen_sites: set[str] = set()
+    for line in stdout.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("[+]"):
+            continue
+        if "email used" in stripped.lower():
+            continue
+        site = stripped[3:].strip().lower()
+        if not site or "." not in site or " " in site:
+            continue
+        if site in seen_sites:
+            continue
+        seen_sites.add(site)
+
+        url = f"https://{site}"
+        hits.append(
+            Hit(
+                target_entity_id=target_id,
+                discovered_type=EntityType.PROFILE,
+                discovered_value=url,
+                relation="registered_on",
+                source_tool="email_intel",
+                is_trusted=True,
+                raw_data={"site": site, "email": email, "method": "holehe"},
+                metadata={"site": site, "url": url, "email": email},
+            )
+        )
+    return hits
+
+
+@register_tool(
+    name="email_intel",
+    target_types=[EntityType.EMAIL],
+    description="Checks public email registrations via Holehe, Gravatar profile API, and custom domain linking.",
+)
+async def collect_email_intel(entity: Entity, client: httpx.AsyncClient) -> list[Hit]:
+    """Gather public registration, Gravatar profile, and domain leads for an email address."""
+    import hashlib
+
+    email = entity.value.strip().lower()
+    if "@" not in email:
+        return []
+
+    hits: list[Hit] = []
+    seen_values: set[str] = set()
+
+    # 1. Link non-free corporate/custom email domain
+    domain = email.split("@", 1)[1].strip()
+    if domain and domain not in FREE_EMAIL_PROVIDERS:
+        seen_values.add(domain)
+        hits.append(
+            Hit(
+                target_entity_id=entity.id,
+                discovered_type=EntityType.DOMAIN,
+                discovered_value=domain,
+                relation="email_domain_of",
+                source_tool="email_intel",
+                is_trusted=True,
+                raw_data={"email": email},
+                metadata={"domain": domain},
+            )
+        )
+
+    # 2. Query public Gravatar JSON profile
+    email_hash = hashlib.md5(email.encode("utf-8")).hexdigest()
+    gravatar_url = f"https://en.gravatar.com/{email_hash}.json"
+    try:
+        resp = await client.get(
+            gravatar_url,
+            headers={"User-Agent": DEFAULT_USER_AGENT},
+            follow_redirects=True,
+            timeout=6.0,
+        )
+        if resp.status_code == 200:
+            entries = resp.json().get("entry", [])
+            if isinstance(entries, list) and entries:
+                prof = entries[0]
+                pref_user = prof.get("preferredUsername")
+                if pref_user and pref_user not in seen_values:
+                    seen_values.add(pref_user)
+                    hits.append(
+                        Hit(
+                            target_entity_id=entity.id,
+                            discovered_type=EntityType.USERNAME,
+                            discovered_value=pref_user,
+                            relation="gravatar_handle",
+                            source_tool="email_intel",
+                            is_trusted=True,
+                            raw_data={
+                                "name": prof.get("displayName"),
+                                "bio": prof.get("aboutMe"),
+                                "location": prof.get("currentLocation"),
+                            },
+                            metadata={
+                                "name": prof.get("displayName", ""),
+                                "bio": prof.get("aboutMe", ""),
+                                "location": prof.get("currentLocation", ""),
+                            },
+                        )
+                    )
+                for acc in prof.get("accounts", []):
+                    acc_url = acc.get("url")
+                    if acc_url and acc_url not in seen_values:
+                        seen_values.add(acc_url)
+                        hits.append(
+                            Hit(
+                                target_entity_id=entity.id,
+                                discovered_type=EntityType.PROFILE,
+                                discovered_value=acc_url,
+                                relation="account_on",
+                                source_tool="email_intel",
+                                is_trusted=True,
+                                raw_data={"site": acc.get("shortname"), "method": "gravatar"},
+                                metadata={"site": acc.get("shortname", ""), "url": acc_url},
+                            )
+                        )
+    except (httpx.HTTPError, httpx.TimeoutException, ValueError) as exc:
+        logger.debug("Gravatar lookup skipped/failed for %s: %s", email, exc)
+
+    # 3. Run Holehe registration check (with -NP so no password reset emails are sent)
+    binary = _find_cli_binary("holehe")
+    if not binary:
+        logger.warning("holehe binary is not installed; skipping email registration check.")
+        log_audit_event("tool_unavailable", {"tool": "holehe", "reason": "binary not found on PATH"})
+        return hits
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                binary,
+                email,
+                "--only-used",
+                "--no-color",
+                "--no-clear",
+                "-NP",
+                "-T",
+                "5",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=tmpdir,
+            )
+            stdout_bytes, _ = await asyncio.wait_for(proc.communicate(), timeout=30.0)
+            stdout = stdout_bytes.decode("utf-8", errors="replace")
+            for h in parse_holehe_output(stdout, email, entity.id):
+                if h.discovered_value not in seen_values:
+                    seen_values.add(h.discovered_value)
+                    hits.append(h)
+                    log_audit_event(
+                        "profile_discovered",
+                        {
+                            "site": h.metadata.get("site", "unknown"),
+                            "url": h.discovered_value,
+                            "username": email,
+                        },
+                    )
+        except Exception as exc:
+            logger.warning("Holehe execution error for %s: %s", email, exc)
+
+    return hits

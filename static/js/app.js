@@ -157,8 +157,11 @@ function handleLiveEvent(evt) {
   } else if (name === 'profile_discovered') {
     appendLog('FOUND', `[${data.site}] ${data.url}`, 'badge-success');
     const nodeId = `profile:${data.url}`;
-    const parentId = `username:${data.username}`;
-    addLiveNodeAndEdge(nodeId, data.site || data.url, 'profile', 1, parentId, 'account_on', 'maigret');
+    const parentPrefix = (data.username || '').includes('@') ? 'email' : 'username';
+    const parentId = `${parentPrefix}:${data.username}`;
+    const relation = parentPrefix === 'email' ? 'registered_on' : 'account_on';
+    const toolName = parentPrefix === 'email' ? 'email_intel' : 'maigret';
+    addLiveNodeAndEdge(nodeId, data.site || data.url, 'profile', 1, parentId, relation, toolName);
   } else if (name === 'resolver_decision') {
     if (data.accepted) {
       appendLog('ACCEPT', `Admitted ${data.hit_value} (confidence: ${data.score})`, 'badge-success');
