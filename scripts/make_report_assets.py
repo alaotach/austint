@@ -114,6 +114,7 @@ def generate_report_assets(
     neural_eval = _load_json(data_dir / "neural_eval.json")
     gnn_eval = _load_json(data_dir / "gnn_eval.json")
     bandit_eval = _load_json(data_dir / "bandit_eval.json")
+    val_eval = _load_json(data_dir / "validation_eval.json")
 
     figures_dir.mkdir(parents=True, exist_ok=True)
     palette = [
@@ -376,14 +377,153 @@ def generate_report_assets(
     lines.extend(
         [
             "",
-            "## 6. Generated Figures & Tables",
+            "## 6. Phase G Validation & Stress Tests (`scripts/run_validation.py`, `data/osint_link/validation_eval.json`)",
+        ]
+    )
+    if val_eval:
+        # 6.1 GNN Leakage Audit
+        gla = val_eval.get("gnn_leakage_audit") or {}
+        lines.extend(
+            [
+                "",
+                "### 6.1 GNN Leakage Audit (Before vs After)",
+                "",
+                "| GNN Variant | Split | PR-AUC | F1 | Precision | Recall | ECE |",
+                "|---|---|---:|---:|---:|---:|---:|",
+            ]
+        )
+        for vkey, vlabel in (
+            ("old_gnn", "Old GNN (pre-audit)"),
+            ("new_gnn_audited", "New GNN (pair-links masked, split-isolated)"),
+            ("new_gnn_candidate_only_edges", "New GNN (candidate-only edges, no anchor broadcast)"),
+        ):
+            vdata = gla.get(vkey) or {}
+            for sp_n in ("test", "ood_platform_test"):
+                r = vdata.get(sp_n) or {}
+                if r:
+                    lines.append(
+                        f"| {vlabel} | `{sp_n}` | {float(r.get('pr_auc', 0.0)):.4f} | {float(r.get('f1', 0.0)):.4f} | "
+                        f"{float(r.get('precision', 0.0)):.4f} | {float(r.get('recall', 0.0)):.4f} | {float(r.get('ece', 0.0)):.4f} |"
+                    )
+
+        # 6.2 Paired Bootstrap
+        pb = val_eval.get("paired_bootstrap") or {}
+        lines.extend(
+            [
+                "",
+                "### 6.2 Person-Clustered Paired Bootstrap (1,000 iterations, seed `42`)",
+                "",
+                "| Split | Comparison | ΔPR-AUC (95% CI) | PR-AUC Sig. | ΔF1 (95% CI) | F1 Sig. |",
+                "|---|---|---:|---|---:|---|",
+            ]
+        )
+        for sp_n in ("test", "ood_platform_test"):
+            for comp, cres in (pb.get(sp_n) or {}).items():
+                pr = cres.get("pr_auc_diff") or {}
+                f1 = cres.get("f1_diff") or {}
+                lines.append(
+                    f"| `{sp_n}` | {comp} | {float(pr.get('mean_diff', 0.0)):+.4f} [{float(pr.get('ci_low', 0.0)):+.4f}, {float(pr.get('ci_high', 0.0)):+.4f}] | "
+                    f"{pr.get('status', 'not significant')} | "
+                    f"{float(f1.get('mean_diff', 0.0)):+.4f} [{float(f1.get('ci_low', 0.0)):+.4f}, {float(f1.get('ci_high', 0.0)):+.4f}] | "
+                    f"{f1.get('status', 'not significant')} |"
+                )
+
+        # 6.3 Shortcut Baselines
+        sb = val_eval.get("shortcut_baselines") or {}
+        lines.extend(
+            [
+                "",
+                "### 6.3 Shortcut Baselines (Dataset Bias Probe)",
+                "",
+                "| Shortcut Model | Split | Pos Rate | PR-AUC | F1 | Precision | Recall |",
+                "|---|---|---:|---:|---:|---:|---:|",
+            ]
+        )
+        for sp_n, sdata in (sb.get("splits") or {}).items():
+            for mname, m in (sdata.get("models") or {}).items():
+                lines.append(
+                    f"| `{mname}` | `{sp_n}` | {float(sdata.get('pos_rate', 0.0)):.4f} | "
+                    f"{float(m.get('pr_auc', 0.0)):.4f} | {float(m.get('f1', 0.0)):.4f} | "
+                    f"{float(m.get('precision', 0.0)):.4f} | {float(m.get('recall', 0.0)):.4f} |"
+                )
+        for flag in sb.get("dataset_bias_flags") or []:
+            lines.append(f"- **Dataset Bias Flag**: {flag}")
+
+        # 6.4 Negative Type Breakdown
+        nb = val_eval.get("negative_type_breakdown") or {}
+        lines.extend(
+            [
+                "",
+                "### 6.4 Per-Negative-Type Breakdown (`test` & `ood_platform_test`)",
+                "",
+                "| Split | Negative Type | Hard Neg? | Model | PR-AUC | F1 | Precision | Recall |",
+                "|---|---|---|---|---:|---:|---:|---:|",
+            ]
+        )
+        for sp_n in ("test", "ood_platform_test"):
+            for neg_t, ndata in (nb.get(sp_n) or {}).items():
+                hard_lbl = "**YES (hard)**" if ndata.get("is_hard_negative") else "no"
+                for mname, m in (ndata.get("models") or {}).items():
+                    lines.append(
+                        f"| `{sp_n}` | `{neg_t}` | {hard_lbl} | `{mname}` | "
+                        f"{float(m.get('pr_auc', 0.0)):.4f} | {float(m.get('f1', 0.0)):.4f} | "
+                        f"{float(m.get('precision', 0.0)):.4f} | {float(m.get('recall', 0.0)):.4f} |"
+                    )
+
+        # 6.5 Val-tuned Chain Confidence
+        cc = val_eval.get("chain_confidence_tuned") or {}
+        if cc:
+            lines.extend(
+                [
+                    "",
+                    "### 6.5 Val-Tuned Chain-Confidence Baseline",
+                    f"- Val-tuned threshold: `{cc.get('val_tuned_threshold')}`",
+                ]
+            )
+            for sp_n in ("test", "ood_platform_test"):
+                r = cc.get(sp_n) or {}
+                if r:
+                    lines.append(
+                        f"- `{sp_n}`: PR-AUC={float(r.get('pr_auc', 0.0)):.4f}, F1={float(r.get('f1', 0.0)):.4f}, "
+                        f"mean_pos={r.get('mean_pos_score')}, mean_neg={r.get('mean_neg_score')}, "
+                        f"pct_below_0.1={r.get('pct_below_0_1')}"
+                    )
+            lines.append("- Explanation: Multiplicative confidence decay (`prod(score * 0.85)`) compresses ~87-92% of multi-hop scores below `0.1`, collapsing threshold separability.")
+
+        # 6.6 Zero-Shot LLM Judge (2 variants)
+        lj = val_eval.get("zero_shot_llm_judge") or {}
+        lines.extend(
+            [
+                "",
+                "### 6.6 Zero-Shot LLM Judge (2 Prompt Variants)",
+                f"- Status: `{lj.get('status', 'not_run')}` (provider: `{lj.get('provider', 'none')}`)",
+            ]
+        )
+        for vname, vres in (lj.get("variants") or {}).items():
+            if vres.get("status") == "ok":
+                lines.append(
+                    f"- `{vname}`: PR-AUC={vres.get('pr_auc'):.4f}, F1={vres.get('f1'):.4f}, ECE={vres.get('ece'):.4f}, "
+                    f"tokens={vres.get('total_tokens')}, cost=${vres.get('cost_estimate_usd')}, latency={vres.get('latency_ms_per_pair')} ms/pair"
+                )
+            else:
+                lines.append(f"- `{vname}`: `{vres.get('status')}` — {vres.get('reason', '')}")
+
+    lines.extend(
+        [
+            "",
+            "## 7. Generated Figures & Tables",
             f"- PR Operating Points: `{pr_fig}`",
             f"- Reliability Diagram: `{rel_fig}`",
             f"- Budget vs Recall: `{bvr_fig}`",
             f"- Ablation Table: `{ablation_md}`",
             "",
-            "## 7. Limitations & Ethics",
-            "See [docs/ETHICS.md](../docs/ETHICS.md) for full details on weak-supervision label noise, platform bias, small unauthenticated dataset size, and privacy/consent safeguards.",
+            "## 8. Threats to Validity",
+            "- **Small dataset**: Only 1,003 public profiles and 1,579 total pairs (574 positives / 1,005 negatives), below the 3k/6k stretch target, yielding wide bootstrap confidence intervals where several differences (e.g., GNN vs HistGBM on in-distribution `test`) are not statistically significant.",
+            "- **Developer-skewed platforms**: Seeds originate from open-source GitHub organizations and fediverse instances (`mastodon.social`, `fosstodon.org`, `hachyderm.io`), which over-represent technical maintainers.",
+            "- **Weak-supervision label noise**: Positives rely on self-declared links; stale/abandoned or org-shared links can introduce label noise (0/100 zero-signal pairs flagged in our 100-pair audit).",
+            "- **Platform bias**: `platform_pair_only` achieves `0.6156` PR-AUC on `test` (vs `0.3673` positive rate), showing that platform-pair frequencies carry shortcut signal.",
+            "- **Anchor-broadcast GNN sensitivity**: When `left`-anchor username broadcast edges are removed (`candidate_only_edges`), GNN PR-AUC drops from `0.9348` to `0.8532` (`test`) and `0.8585` to `0.6967` (`ood_platform_test`).",
+            "- **Ethics & Consent**: See [docs/ETHICS.md](../docs/ETHICS.md) for privacy, consent-gate, and breach-tool gating details.",
         ]
     )
 

@@ -147,6 +147,8 @@ def build_dataset_graph(
     *,
     confidence_decay: float = 0.85,
     similarity_threshold: float = 0.65,
+    exclude_pair_forming_edges: bool = True,
+    candidate_only_edges: bool = False,
 ) -> CandidateGraphData:
     """Build a candidate graph from dataset pair rows and Phase C pair scores.
 
@@ -202,9 +204,35 @@ def build_dataset_graph(
         l_links, l_doms, l_ments, l_u, l_d, _ = _profile_signals(left)
         r_links, r_doms, r_ments, r_u, r_d, _ = _profile_signals(right)
 
-        node_links.append(l_links | r_links)
-        node_domains.append(l_doms | r_doms)
-        node_mentions.append(l_ments | r_ments)
+        if exclude_pair_forming_edges:
+            l_url = _norm_url(str(left.get("url") or ""))
+            r_url = _norm_url(str(right.get("url") or ""))
+            l_host = _extract_domain(str(left.get("url") or ""))
+            r_host = _extract_domain(str(right.get("url") or ""))
+            if r_url:
+                l_links.discard(r_url)
+            if l_url:
+                r_links.discard(l_url)
+            if r_host:
+                l_doms.discard(r_host)
+            if l_host:
+                r_doms.discard(l_host)
+            # Also drop any link/domain that bridges left and right within this single pair
+            shared_pair_links = l_links & r_links
+            shared_pair_doms = l_doms & r_doms
+            l_links = l_links - shared_pair_links
+            r_links = r_links - shared_pair_links
+            l_doms = l_doms - shared_pair_doms
+            r_doms = r_doms - shared_pair_doms
+
+        if candidate_only_edges:
+            node_links.append(r_links)
+            node_domains.append(r_doms)
+            node_mentions.append(r_ments)
+        else:
+            node_links.append(l_links | r_links)
+            node_domains.append(l_doms | r_doms)
+            node_mentions.append(l_ments | r_ments)
         node_unames.append(r_u or l_u)
         node_dnames.append(r_d or l_d)
         hand_feats.append(pair_dict_to_feature_vector(r).tolist())
@@ -857,3 +885,20 @@ class NeuralGNNResolver(BaseResolver):
             temperature=float(payload.get("gnn_temperature", 1.0)),
             confidence_decay=float(payload.get("confidence_decay", 0.85)),
         )
+
+
+def verify_split_graph_isolation(split_graphs: dict[str, CandidateGraphData]) -> bool:
+    """Verify zero node overlap between train/val and eval splits (test, ood_platform_test)."""
+    train_ids = set(split_graphs["train"].node_ids) if "train" in split_graphs else set()
+    val_ids = set(split_graphs["val"].node_ids) if "val" in split_graphs else set()
+    if train_ids & val_ids:
+        raise AssertionError(f"Cross-split leakage between train and val: {len(train_ids & val_ids)} nodes")
+    for eval_name in ("test", "ood_platform_test"):
+        if eval_name not in split_graphs:
+            continue
+        eval_ids = set(split_graphs[eval_name].node_ids)
+        if train_ids & eval_ids:
+            raise AssertionError(f"Cross-split leakage between train and {eval_name}: {len(train_ids & eval_ids)} nodes")
+        if val_ids & eval_ids:
+            raise AssertionError(f"Cross-split leakage between val and {eval_name}: {len(val_ids & eval_ids)} nodes")
+    return True

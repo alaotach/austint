@@ -144,14 +144,19 @@ def test_dataset_graph_construction_edges_and_features():
     ]
     rows[1]["left"]["links"] = ["https://adalovelace.example/about"]
 
+    gdata_unmasked = build_dataset_graph(
+        rows, [0.9, 0.7, 0.2], confidence_decay=0.85, exclude_pair_forming_edges=False
+    )
+    assert gdata_unmasked.edge_counts_by_type["links"] >= 2
+    assert gdata_unmasked.edge_counts_by_type["shared_domain"] >= 2
+
     gdata = build_dataset_graph(rows, [0.9, 0.7, 0.2], confidence_decay=0.85)
     assert gdata.node_features.shape == (3, NODE_FEATURE_DIM)
     assert abs(float(gdata.node_features[0, 0]) - 0.9) < 1e-5
     assert abs(float(gdata.chain_scores[1]) - (0.9 * 0.85 * 0.7)) < 1e-4
-    # Expect links, mentions, shared_domain, and/or similarity edges
+    # Pair-forming links are masked by default, while mentions/similarity edges remain
     assert gdata.edge_index.size(1) > 0
-    assert gdata.edge_counts_by_type["links"] >= 2
-    assert gdata.edge_counts_by_type["shared_domain"] >= 2
+    assert gdata.edge_counts_by_type["links"] == 0
     assert gdata.edge_counts_by_type["mentions"] >= 2
 
 

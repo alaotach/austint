@@ -44,11 +44,103 @@ Every number below is generated directly from JSON artifacts in `data/osint_link
 - Status: `skipped_no_agent_transitions` (future work for live agent-run logging)
 - Note: No logged agent-run policy_transitions.jsonl or eval episodes found. Run OSINTAgent with policy_log_path enabled first.
 
-## 6. Generated Figures & Tables
+## 6. Phase G Validation & Stress Tests (`scripts/run_validation.py`, `data/osint_link/validation_eval.json`)
+
+### 6.1 GNN Leakage Audit (Before vs After)
+
+| GNN Variant | Split | PR-AUC | F1 | Precision | Recall | ECE |
+|---|---|---:|---:|---:|---:|---:|
+| Old GNN (pre-audit) | `test` | 0.9250 | 0.8391 | 0.8022 | 0.8795 | 0.0742 |
+| Old GNN (pre-audit) | `ood_platform_test` | 0.8481 | 0.8033 | 0.7656 | 0.8448 | 0.1462 |
+| New GNN (pair-links masked, split-isolated) | `test` | 0.9348 | 0.8362 | 0.7872 | 0.8916 | 0.0797 |
+| New GNN (pair-links masked, split-isolated) | `ood_platform_test` | 0.8585 | 0.7656 | 0.7000 | 0.8448 | 0.1615 |
+| New GNN (candidate-only edges, no anchor broadcast) | `test` | 0.8532 | 0.7123 | 0.8254 | 0.6265 | 0.0665 |
+| New GNN (candidate-only edges, no anchor broadcast) | `ood_platform_test` | 0.6967 | 0.5625 | 0.7105 | 0.4655 | 0.1044 |
+
+### 6.2 Person-Clustered Paired Bootstrap (1,000 iterations, seed `42`)
+
+| Split | Comparison | ΔPR-AUC (95% CI) | PR-AUC Sig. | ΔF1 (95% CI) | F1 Sig. |
+|---|---|---:|---|---:|---|
+| `test` | GNN vs HistGBM | +0.0196 [-0.0216, +0.0644] | not significant | +0.0100 [-0.0691, +0.0886] | not significant |
+| `test` | Neural vs HistGBM | -0.0948 [-0.1541, -0.0429] | significant | -0.1373 [-0.2089, -0.0699] | significant |
+| `test` | GNN vs Neural | +0.1145 [+0.0744, +0.1585] | significant | +0.1473 [+0.0849, +0.2171] | significant |
+| `ood_platform_test` | GNN vs HistGBM | +0.0977 [+0.0059, +0.2091] | significant | +0.0939 [-0.0552, +0.2571] | not significant |
+| `ood_platform_test` | Neural vs HistGBM | +0.0421 [-0.0363, +0.1278] | not significant | +0.0557 [-0.0890, +0.2144] | not significant |
+| `ood_platform_test` | GNN vs Neural | +0.0556 [+0.0089, +0.1077] | significant | +0.0382 [-0.0381, +0.1368] | not significant |
+
+### 6.3 Shortcut Baselines (Dataset Bias Probe)
+
+| Shortcut Model | Split | Pos Rate | PR-AUC | F1 | Precision | Recall |
+|---|---|---:|---:|---:|---:|---:|
+| `platform_pair_only` | `test` | 0.3673 | 0.6156 | 0.7315 | 0.5940 | 0.9518 |
+| `username_sim_only` | `test` | 0.3673 | 0.7621 | 0.7519 | 1.0000 | 0.6024 |
+| `bio_len_has_bio_only` | `test` | 0.3673 | 0.4420 | 0.0465 | 0.6667 | 0.0241 |
+| `platform_pair_only` | `ood_platform_test` | 0.4143 | 0.5275 | 0.5827 | 0.5362 | 0.6379 |
+| `username_sim_only` | `ood_platform_test` | 0.4143 | 0.6842 | 0.6047 | 0.9286 | 0.4483 |
+| `bio_len_has_bio_only` | `ood_platform_test` | 0.4143 | 0.4849 | 0.0000 | 0.0000 | 0.0000 |
+- **Dataset Bias Flag**: platform_pair_only achieves PR-AUC=0.6156 vs random baseline=0.3673 on test
+
+### 6.4 Per-Negative-Type Breakdown (`test` & `ood_platform_test`)
+
+| Split | Negative Type | Hard Neg? | Model | PR-AUC | F1 | Precision | Recall |
+|---|---|---|---|---:|---:|---:|---:|
+| `test` | `diff_person_fallback` | no | `rule_baseline` | 0.9327 | 0.6825 | 1.0000 | 0.5181 |
+| `test` | `diff_person_fallback` | no | `logistic_regression` | 0.9573 | 0.8333 | 0.9836 | 0.7229 |
+| `test` | `diff_person_fallback` | no | `hist_gradient_boosting` | 0.9649 | 0.8356 | 0.9683 | 0.7349 |
+| `test` | `diff_person_fallback` | no | `phase_c_neural` | 0.9366 | 0.7808 | 0.9048 | 0.6867 |
+| `test` | `diff_person_fallback` | no | `phase_c_plus_gnn` | 0.9854 | 0.9136 | 0.9367 | 0.8916 |
+| `test` | `similar_username_diff_person` | **YES (hard)** | `rule_baseline` | 0.8401 | 0.6466 | 0.8600 | 0.5181 |
+| `test` | `similar_username_diff_person` | **YES (hard)** | `logistic_regression` | 0.9163 | 0.8219 | 0.9524 | 0.7229 |
+| `test` | `similar_username_diff_person` | **YES (hard)** | `hist_gradient_boosting` | 0.9675 | 0.8472 | 1.0000 | 0.7349 |
+| `test` | `similar_username_diff_person` | **YES (hard)** | `phase_c_neural` | 0.9017 | 0.7600 | 0.8507 | 0.6867 |
+| `test` | `similar_username_diff_person` | **YES (hard)** | `phase_c_plus_gnn` | 0.9671 | 0.8970 | 0.9024 | 0.8916 |
+| `test` | `same_name_diff_org_city` | **YES (hard)** | `rule_baseline` | 0.8735 | 0.6615 | 0.9149 | 0.5181 |
+| `test` | `same_name_diff_org_city` | **YES (hard)** | `logistic_regression` | 0.9380 | 0.8219 | 0.9524 | 0.7229 |
+| `test` | `same_name_diff_org_city` | **YES (hard)** | `hist_gradient_boosting` | 0.9575 | 0.8414 | 0.9839 | 0.7349 |
+| `test` | `same_name_diff_org_city` | **YES (hard)** | `phase_c_neural` | 0.9412 | 0.7917 | 0.9344 | 0.6867 |
+| `test` | `same_name_diff_org_city` | **YES (hard)** | `phase_c_plus_gnn` | 0.9843 | 0.9193 | 0.9487 | 0.8916 |
+| `test` | `same_display_name_diff_links` | **YES (hard)** | `rule_baseline` | 0.9639 | 0.6772 | 0.9773 | 0.5181 |
+| `test` | `same_display_name_diff_links` | **YES (hard)** | `logistic_regression` | 0.9819 | 0.8392 | 1.0000 | 0.7229 |
+| `test` | `same_display_name_diff_links` | **YES (hard)** | `hist_gradient_boosting` | 0.9884 | 0.8472 | 1.0000 | 0.7349 |
+| `test` | `same_display_name_diff_links` | **YES (hard)** | `phase_c_neural` | 0.9656 | 0.7862 | 0.9194 | 0.6867 |
+| `test` | `same_display_name_diff_links` | **YES (hard)** | `phase_c_plus_gnn` | 0.9858 | 0.9250 | 0.9610 | 0.8916 |
+| `ood_platform_test` | `diff_person_fallback` | no | `rule_baseline` | 0.8517 | 0.4935 | 1.0000 | 0.3276 |
+| `ood_platform_test` | `diff_person_fallback` | no | `logistic_regression` | 0.8915 | 0.6818 | 1.0000 | 0.5172 |
+| `ood_platform_test` | `diff_person_fallback` | no | `hist_gradient_boosting` | 0.8499 | 0.6818 | 1.0000 | 0.5172 |
+| `ood_platform_test` | `diff_person_fallback` | no | `phase_c_neural` | 0.9040 | 0.7961 | 0.9111 | 0.7069 |
+| `ood_platform_test` | `diff_person_fallback` | no | `phase_c_plus_gnn` | 0.9349 | 0.8448 | 0.8448 | 0.8448 |
+| `ood_platform_test` | `similar_username_diff_person` | **YES (hard)** | `rule_baseline` | 0.8231 | 0.4872 | 0.9500 | 0.3276 |
+| `ood_platform_test` | `similar_username_diff_person` | **YES (hard)** | `logistic_regression` | 0.8591 | 0.6742 | 0.9677 | 0.5172 |
+| `ood_platform_test` | `similar_username_diff_person` | **YES (hard)** | `hist_gradient_boosting` | 0.8946 | 0.6818 | 1.0000 | 0.5172 |
+| `ood_platform_test` | `similar_username_diff_person` | **YES (hard)** | `phase_c_neural` | 0.8968 | 0.7810 | 0.8723 | 0.7069 |
+| `ood_platform_test` | `similar_username_diff_person` | **YES (hard)** | `phase_c_plus_gnn` | 0.9312 | 0.8522 | 0.8596 | 0.8448 |
+| `ood_platform_test` | `same_name_diff_org_city` | **YES (hard)** | `rule_baseline` | 0.8426 | 0.4872 | 0.9500 | 0.3276 |
+| `ood_platform_test` | `same_name_diff_org_city` | **YES (hard)** | `logistic_regression` | 0.8843 | 0.6742 | 0.9677 | 0.5172 |
+| `ood_platform_test` | `same_name_diff_org_city` | **YES (hard)** | `hist_gradient_boosting` | 0.8827 | 0.6742 | 0.9677 | 0.5172 |
+| `ood_platform_test` | `same_name_diff_org_city` | **YES (hard)** | `phase_c_neural` | 0.9300 | 0.7961 | 0.9111 | 0.7069 |
+| `ood_platform_test` | `same_name_diff_org_city` | **YES (hard)** | `phase_c_plus_gnn` | 0.9579 | 0.8829 | 0.9245 | 0.8448 |
+
+### 6.5 Val-Tuned Chain-Confidence Baseline
+- Val-tuned threshold: `0.01`
+- `test`: PR-AUC=0.4569, F1=0.4000, mean_pos=0.0499, mean_neg=0.0232, pct_below_0.1=0.9204
+- `ood_platform_test`: PR-AUC=0.4939, F1=0.4158, mean_pos=0.0696, mean_neg=0.0547, pct_below_0.1=0.8714
+- Explanation: Multiplicative confidence decay (`prod(score * 0.85)`) compresses ~87-92% of multi-hop scores below `0.1`, collapsing threshold separability.
+
+### 6.6 Zero-Shot LLM Judge (2 Prompt Variants)
+- Status: `excluded_rate_limited` (provider: `openrouter`)
+- `minimal`: `excluded_rate_limited` — Provider rate-limited or failed before completing split; excluded from comparisons.
+- `field_by_field`: `excluded_rate_limited` — Provider rate-limited or failed before completing split; excluded from comparisons.
+
+## 7. Generated Figures & Tables
 - PR Operating Points: `report/figures/pr_curves.png`
 - Reliability Diagram: `report/figures/reliability_diagram.png`
 - Budget vs Recall: `report/figures/budget_vs_recall.png`
 - Ablation Table: `report/figures/ablation_table.md`
 
-## 7. Limitations & Ethics
-See [docs/ETHICS.md](../docs/ETHICS.md) for full details on weak-supervision label noise, platform bias, small unauthenticated dataset size, and privacy/consent safeguards.
+## 8. Threats to Validity
+- **Small dataset**: Only 1,003 public profiles and 1,579 total pairs (574 positives / 1,005 negatives), below the 3k/6k stretch target, yielding wide bootstrap confidence intervals where several differences (e.g., GNN vs HistGBM on in-distribution `test`) are not statistically significant.
+- **Developer-skewed platforms**: Seeds originate from open-source GitHub organizations and fediverse instances (`mastodon.social`, `fosstodon.org`, `hachyderm.io`), which over-represent technical maintainers.
+- **Weak-supervision label noise**: Positives rely on self-declared links; stale/abandoned or org-shared links can introduce label noise (0/100 zero-signal pairs flagged in our 100-pair audit).
+- **Platform bias**: `platform_pair_only` achieves `0.6156` PR-AUC on `test` (vs `0.3673` positive rate), showing that platform-pair frequencies carry shortcut signal.
+- **Anchor-broadcast GNN sensitivity**: When `left`-anchor username broadcast edges are removed (`candidate_only_edges`), GNN PR-AUC drops from `0.9348` to `0.8532` (`test`) and `0.8585` to `0.6967` (`ood_platform_test`).
+- **Ethics & Consent**: See [docs/ETHICS.md](../docs/ETHICS.md) for privacy, consent-gate, and breach-tool gating details.
