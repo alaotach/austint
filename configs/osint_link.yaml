@@ -1,0 +1,54 @@
+# Central configuration for OSINT-Link Dataset & Experiments (Phase A+)
+seed: 42
+
+dataset:
+  name: osint-link
+  output_dir: data/osint_link
+  target_positives: 3000
+  target_negatives: 6000
+  negatives_per_positive: 2
+  salt_env_var: OSINT_LINK_HASH_SALT
+  default_salt: osint-link-public-research-v1
+
+crawl:
+  max_seed_users: 1500
+  max_profiles_per_person: 6
+  per_domain_delay_sec: 1.0
+  concurrency: 8
+  request_timeout_sec: 8.0
+  max_response_bytes: 204800
+  seed_orgs:
+    - python
+    - scikit-learn
+    - pytorch
+    - huggingface
+    - fastapi
+    - pallets
+    - encode
+    - tiangolo
+    - astral-sh
+    - rust-lang
+    - golang
+    - nodejs
+    - vercel
+    - supabase
+    - langchain-ai
+  mastodon_instances:
+    - mastodon.social
+    - fosstodon.org
+    - hachyderm.io
+
+features:
+  clip_model: openai/clip-vit-base-patch32
+  text_model: all-MiniLM-L6-v2
+  phash_bits: 64
+  store_raw_bios: false
+  store_raw_photos: false
+
+splits:
+  train_ratio: 0.70
+  val_ratio: 0.15
+  test_ratio: 0.15
+  ood_platforms:
+    - mastodon
+    - devto

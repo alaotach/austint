@@ -19,3 +19,4 @@ demo_audit.jsonl
 audit_job_*.jsonl
 .osint_dead_hosts.json
 .env
+data/
