@@ -32,3 +32,7 @@
 ## Milestone 6: Audit & Planner View + Report / Export View
 - **Iteration 1** (Verified at `375`, `768`, `1440` with recorded run):
   - Hierarchy & scannability: **5/5**, Information density: **5/5**, Consistency: **5/5**, State coverage: **5/5**, Responsiveness: **5/5**, Accessibility: **5/5**, Console/network: **5/5** (0 errors).
+
+## Milestone 7: Data-Depth Extraction Improvements + Fixtures & Tests
+- Added `parse_public_profile_html` and expanded `_extract_hydration_fields` in `osint_agent/collectors/profile_analyzer.py` (JSON-LD, `__NEXT_DATA__`, OpenGraph, `joined`, `activity_dates`, `followers`, `banner_url`, `languages`, `orgs`; removed `streetaddress`/`address`).
+- Verified with saved fixture (`tests/fixtures/profile_jsonld_nextdata.html`) and offline tests (`tests/test_phase_m7_parsers.py`).

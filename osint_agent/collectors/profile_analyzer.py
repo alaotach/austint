@@ -719,10 +719,17 @@ def _extract_hydration_fields(obj: Any, out: dict[str, Any], depth: int = 0) -> 
                     out["bio"] = val[:600]
                 elif kl in ("name", "fullname", "displayname", "display_name") and not out.get("name"):
                     out["name"] = val[:120]
-                elif kl in ("location", "city", "country", "address", "streetaddress", "addresslocality") and not out.get("location"):
+                elif kl in ("location", "city", "country", "addresslocality") and not out.get("location"):
                     out["location"] = val[:160]
                 elif kl in ("company", "organization", "org", "worksfor") and not out.get("company"):
                     out["company"] = val[:120]
+                    out.setdefault("orgs", []).append(val[:120])
+                elif kl in ("joined", "created_at", "datecreated", "member_since") and not out.get("joined"):
+                    out["joined"] = val[:40]
+                elif kl in ("updated_at", "datemodified", "last_active", "lastseen") and not out.get("activity_dates"):
+                    out["activity_dates"] = val[:40]
+                elif kl in ("banner", "banner_url", "coverimage", "header_image") and val.startswith("http") and not out.get("banner_url"):
+                    out["banner_url"] = val
                 elif kl in ("website", "blog", "homepage", "website_url") and val.startswith("http") and not out.get("website"):
                     out["website"] = val
                 elif kl in ("email", "contact_email") and "@" in val and not out.get("email"):
@@ -737,17 +744,72 @@ def _extract_hydration_fields(obj: Any, out: dict[str, Any], depth: int = 0) -> 
                     out["job_title"] = val[:120]
                 elif kl in _EXTRA_HYDRATION_KEYS and len(val) <= 200:
                     out.setdefault("extra_fields", {})[kl] = val
-            elif isinstance(v, (int, float)) and not isinstance(v, bool) and kl in _EXTRA_HYDRATION_KEYS:
-                out.setdefault("extra_fields", {})[kl] = v
-            elif isinstance(v, list) and kl in ("skills", "languages", "knowsabout") and v:
+            elif isinstance(v, (int, float)) and not isinstance(v, bool):
+                if kl in ("followers", "followers_count", "followerscount") and out.get("followers") is None:
+                    out["followers"] = int(v)
+                elif kl in ("public_repos", "repos_count") and out.get("public_repos") is None:
+                    out["public_repos"] = int(v)
+                elif kl in _EXTRA_HYDRATION_KEYS:
+                    out.setdefault("extra_fields", {})[kl] = v
+            elif isinstance(v, list) and kl in ("skills", "languages", "knowsabout", "orgs", "memberof") and v:
                 items = [str(x).strip() for x in v[:12] if isinstance(x, (str, int, float)) and str(x).strip()]
                 if items:
-                    out.setdefault("skills", []).extend(items)
+                    if kl in ("languages",):
+                        out.setdefault("languages", []).extend(items)
+                    elif kl in ("orgs", "memberof"):
+                        out.setdefault("orgs", []).extend(items)
+                    else:
+                        out.setdefault("skills", []).extend(items)
             elif isinstance(v, (dict, list)):
                 _extract_hydration_fields(v, out, depth + 1)
     elif isinstance(obj, list):
         for item in obj[:25]:
             _extract_hydration_fields(item, out, depth + 1)
+
+
+def parse_public_profile_html(html: str) -> dict[str, Any]:
+    """Parse JSON-LD, __NEXT_DATA__, and OpenGraph tags from a public HTML profile page."""
+    info: dict[str, Any] = {}
+    parsed_meta = parse_html_metadata(html)
+    if isinstance(parsed_meta, dict):
+        if parsed_meta.get("title"):
+            info["title"] = parsed_meta["title"]
+        if parsed_meta.get("description"):
+            info["bio"] = parsed_meta["description"]
+    elif isinstance(parsed_meta, str) and parsed_meta:
+        info["bio"] = parsed_meta
+
+    for match in JSON_LD_PATTERN.finditer(html):
+        try:
+            ld = json.loads(match.group(1))
+            _extract_hydration_fields(ld, info)
+            if isinstance(ld, dict):
+                if ld.get("jobTitle"):
+                    info["job_title"] = str(ld["jobTitle"])
+                same_as = ld.get("sameAs")
+                if isinstance(same_as, list):
+                    info.setdefault("linked_urls", []).extend(str(u) for u in same_as if str(u).startswith("http"))
+        except Exception:
+            pass
+
+    next_m = NEXT_DATA_PATTERN.search(html)
+    if next_m:
+        try:
+            _extract_hydration_fields(json.loads(next_m.group(1)), info)
+        except Exception:
+            pass
+
+    images: list[str] = list(info.get("images") or [])
+    for pat in (OG_IMAGE_PATTERN, AVATAR_IMG_PATTERN):
+        for m in pat.finditer(html):
+            img_u = m.group(1)
+            if not img_u.lower().split("?")[0].endswith((".svg", ".ico")) and img_u not in images:
+                images.append(img_u)
+                if not info.get("avatar_url"):
+                    info["avatar_url"] = img_u
+    if images:
+        info["images"] = images[:8]
+    return info
 
 
 async def _analyze_generic_html(url: str, client: httpx.AsyncClient) -> dict[str, Any]:
