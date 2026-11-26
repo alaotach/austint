@@ -50,13 +50,16 @@ Agentic OSINT"*.
   Mastodon, Dev.to, personal blogs) over-represent technical open-source
   maintainers and English-language profiles; models trained here should not be
   assumed to generalize to non-technical populations without domain validation.
-- **Small dataset & crawl constraints**: Unauthenticated crawling is tightly
-  rate-limited (`>= 1.0s`/domain) and GitHub search/API quotas without
-  `GITHUB_TOKEN` yielded only 84 public profiles / 114 OOD pairs in the local
-  snapshot (`train=0`, `test=0`), preventing real-data supervised training until
-  a full authenticated crawl is executed.
+- **Small dataset & crawl constraints**: Even with an authenticated `GITHUB_TOKEN`,
+  rate-limited public crawling (`>= 1.0s`/domain) across 1,003 public profiles
+  yielded 1,579 total pairs (574 positives / 1,005 negatives across `train`=1,017,
+  `val`=196, `test`=226, `ood_platform_test`=140), below the 3k/6k stretch target.
+  Pair-forming self-declared links are masked prior to feature extraction
+  (`domain_overlap > 0` in 0/574 positives and 0/1,005 negatives).
 - **Privacy & dual-use considerations**: Even public-only OSINT aggregation can
   pose correlation/doxxing risks if misused. To mitigate harm, this project
   enforces explicit authorization consent (`Scope.consent_confirmed`), audit
-  logging, feature-only exports (no raw bios/photos), and strict refusal of
-  non-public or sensitive attributes.
+  logging, feature-only exports (no raw bios/photos), strict refusal of
+  non-public or sensitive attributes, and gates breach/infostealer lookups
+  (Hudson Rock Cavalier, XposedOrNot) off by default behind
+  `OSINT_ENABLE_BREACH_INTEL=1`.

@@ -1502,15 +1502,16 @@ async def collect_email_intel(entity: Entity, client: httpx.AsyncClient) -> list
         except (httpx.HTTPError, httpx.TimeoutException, ValueError) as exc:
             logger.debug("Hudson Rock email lookup failed for %s: %s", email, exc)
 
-    await asyncio.gather(
+    tasks = [
         _check_gravatar(),
         _check_github(),
-        _check_xposedornot(),
         _check_duolingo(),
         _check_pgp_keyservers(),
-        _check_hudson_rock_email(),
-        return_exceptions=True,
-    )
+    ]
+    if os.getenv("OSINT_ENABLE_BREACH_INTEL") == "1":
+        tasks.extend([_check_xposedornot(), _check_hudson_rock_email()])
+
+    await asyncio.gather(*tasks, return_exceptions=True)
 
     # 3. Run Holehe registration check (with -NP so no password reset emails are sent)
     binary = _find_cli_binary("holehe")
@@ -2265,6 +2266,8 @@ async def collect_playstore_intel(entity: Entity, client: httpx.AsyncClient) -> 
 )
 async def collect_breach_intel(entity: Entity, client: httpx.AsyncClient) -> list[Hit]:
     """Query Hudson Rock Cavalier OSINT API by username for infostealer compromise metadata."""
+    if os.getenv("OSINT_ENABLE_BREACH_INTEL") != "1":
+        return []
     from urllib.parse import quote
 
     username = entity.value.strip().lstrip("@")

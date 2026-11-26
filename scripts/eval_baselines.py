@@ -21,6 +21,7 @@ from osint_agent.ml.baselines import (
     HistGBMResolver,
     ZeroShotLLMJudge,
     bootstrap_metrics_ci,
+    compute_metrics,
     pair_dict_to_feature_vector,
     score_rule_baseline,
 )
@@ -49,6 +50,19 @@ def evaluate_baselines(
     can_fit_supervised = len(train_rows) >= 4 and len(np.unique(y_train)) >= 2
 
     rule_resolver = BaselineWeightedResolver()
+    rule_threshold = 0.5
+    val_rows = splits.get("val", [])
+    if val_rows:
+        y_val = np.array([int(r["label"]) for r in val_rows], dtype=int)
+        if len(np.unique(y_val)) >= 2:
+            probs_val_rule = np.array([score_rule_baseline(r, rule_resolver) for r in val_rows], dtype=np.float64)
+            best_f1 = -1.0
+            for cand_t in np.linspace(0.05, 0.90, 18):
+                f1_val = compute_metrics(y_val, probs_val_rule, threshold=float(cand_t))["f1"]
+                if f1_val > best_f1:
+                    best_f1 = f1_val
+                    rule_threshold = float(cand_t)
+
     logreg_resolver: LearnedResolver | None = None
     hgb_resolver: HistGBMResolver | None = None
 
@@ -73,6 +87,7 @@ def evaluate_baselines(
         "seed": seed,
         "can_fit_supervised": can_fit_supervised,
         "train_pairs": len(train_rows),
+        "rule_threshold": round(rule_threshold, 4),
         "splits": {},
     }
 
@@ -91,7 +106,8 @@ def evaluate_baselines(
         probs_rule = np.array([score_rule_baseline(r, rule_resolver) for r in rows], dtype=np.float64)
         lat_rule = round(((time.perf_counter() - t0) * 1000.0) / len(rows), 4)
         split_res["rule_baseline"] = {
-            "metrics": bootstrap_metrics_ci(y_true, probs_rule, n_bootstrap=n_bootstrap, seed=seed),
+            "metrics": bootstrap_metrics_ci(y_true, probs_rule, n_bootstrap=n_bootstrap, seed=seed, threshold=rule_threshold),
+            "threshold": round(rule_threshold, 4),
             "latency_ms_per_pair": lat_rule,
         }
 

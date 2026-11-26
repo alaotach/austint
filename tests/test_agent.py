@@ -700,8 +700,9 @@ async def test_trusted_hit_inherits_parent_confidence_without_decay(tmp_path: Pa
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_tool_email_intel_enrichment() -> None:
+async def test_tool_email_intel_enrichment(monkeypatch) -> None:
     """email_intel should aggregate GitHub commits/users, XposedOrNot breaches, Gravatar, Duolingo, and PGP."""
+    monkeypatch.setenv("OSINT_ENABLE_BREACH_INTEL", "1")
     import hashlib
     from unittest.mock import patch
 
@@ -1073,8 +1074,9 @@ async def test_profile_analyzer_github_repo_deep_scrape() -> None:
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_tool_email_intel_breach_analytics() -> None:
+async def test_tool_email_intel_breach_analytics(monkeypatch) -> None:
     """email_intel should parse XposedOrNot breach-analytics and emit a breach_analytics Hit."""
+    monkeypatch.setenv("OSINT_ENABLE_BREACH_INTEL", "1")
     import hashlib
     from unittest.mock import AsyncMock, patch
     from osint_agent.collectors.tools import collect_email_intel
@@ -1166,8 +1168,9 @@ async def test_tool_email_intel_breach_analytics() -> None:
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_tool_breach_intel_hudson_rock_username() -> None:
+async def test_tool_breach_intel_hudson_rock_username(monkeypatch) -> None:
     """breach_intel should emit infostealer_compromise Hits from Hudson Rock by username."""
+    monkeypatch.setenv("OSINT_ENABLE_BREACH_INTEL", "1")
     from osint_agent.collectors.tools import collect_breach_intel
 
     username = "testuser_osint"
@@ -1230,8 +1233,9 @@ async def test_tool_breach_intel_hudson_rock_no_stealers() -> None:
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_tool_email_intel_hudson_rock_infostealer() -> None:
+async def test_tool_email_intel_hudson_rock_infostealer(monkeypatch) -> None:
     """email_intel should emit infostealer_compromise Hit when Hudson Rock finds stealer data by email."""
+    monkeypatch.setenv("OSINT_ENABLE_BREACH_INTEL", "1")
     import hashlib
     from unittest.mock import patch
     from osint_agent.collectors.tools import collect_email_intel

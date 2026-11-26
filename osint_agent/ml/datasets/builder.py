@@ -550,6 +550,40 @@ async def crawl_self_declared_profiles(
     return profiles, positive_pairs
 
 
+def _norm_link(url: str) -> str:
+    p = urlparse((url or "").strip())
+    host = p.netloc.lower().lstrip("www.")
+    path = p.path.rstrip("/").lower()
+    return f"{host}{path}"
+
+
+def _mask_pair_formation_links(
+    a: ProfileRecord,
+    b: ProfileRecord,
+) -> tuple[list[str], list[str], set[str], set[str]]:
+    """Drop the self-declared link(s) connecting `a` and `b` to prevent label leakage."""
+    norm_a = _norm_link(a.url)
+    norm_b = _norm_link(b.url)
+    host_a = urlparse(a.url).netloc.lower().lstrip("www.")
+    host_b = urlparse(b.url).netloc.lower().lstrip("www.")
+    site_platforms = {"personal_site", "blog", "website", "other"}
+
+    def _keep(url: str, target_norm: str, target_host: str, target_plat: str) -> bool:
+        nu = _norm_link(url)
+        if not nu or nu == target_norm:
+            return False
+        hu = urlparse(url).netloc.lower().lstrip("www.")
+        if target_plat in site_platforms and target_host and hu == target_host:
+            return False
+        return True
+
+    masked_a = [u for u in a.links if _keep(u, norm_b, host_b, b.platform)]
+    masked_b = [u for u in b.links if _keep(u, norm_a, host_a, a.platform)]
+    doms_a = {urlparse(u).netloc.lower().lstrip("www.") for u in masked_a if urlparse(u).netloc}
+    doms_b = {urlparse(u).netloc.lower().lstrip("www.") for u in masked_b if urlparse(u).netloc}
+    return masked_a, masked_b, doms_a, doms_b
+
+
 def _pair_to_exported_dict(
     a: ProfileRecord,
     b: ProfileRecord,
@@ -558,12 +592,13 @@ def _pair_to_exported_dict(
     neg_type: str = "",
 ) -> dict[str, Any]:
     """Serialize a pair to privacy-preserving features + hashed person IDs (zero raw bios or raw photos)."""
+    masked_links_a, masked_links_b, doms_a, doms_b = _mask_pair_formation_links(a, b)
     ctx = TargetContext(
         names=[a.display_name] if a.display_name else [],
         usernames=[a.username] if a.username else [],
         texts=[a.bio] if a.bio else [],
         locations=[a.location] if a.location else [],
-        domains=list(a.link_domains),
+        domains=list(doms_a),
     )
     hit = Hit(
         target_entity_id=a.person_id,
@@ -579,7 +614,7 @@ def _pair_to_exported_dict(
             "bio": b.bio,
             "location": b.location,
             "company": b.company,
-            "linked_urls": b.links,
+            "linked_urls": masked_links_b,
         },
     )
     hand_feats = extract_features(ctx, hit)
@@ -589,7 +624,6 @@ def _pair_to_exported_dict(
     if p_sim > 0 or c_sim > 0:
         hand_feats["avatar_sim"] = round(max(p_sim, c_sim), 4)
 
-    doms_a, doms_b = a.link_domains, b.link_domains
     union_doms = doms_a | doms_b
     shared_doms = doms_a & doms_b
     links_jaccard = round(len(shared_doms) / len(union_doms), 4) if union_doms else 0.0
@@ -617,8 +651,8 @@ def _pair_to_exported_dict(
         "bio_emb_sim": cosine_sim(a.bio_emb, b.bio_emb),
         "links_jaccard": links_jaccard,
         "shared_domain_count": len(shared_doms),
-        "link_count_a": len(a.links),
-        "link_count_b": len(b.links),
+        "link_count_a": len(masked_links_a),
+        "link_count_b": len(masked_links_b),
         "phash_a": a.phash,
         "phash_b": b.phash,
         "phash_sim": p_sim,

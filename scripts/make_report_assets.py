@@ -127,6 +127,8 @@ def generate_report_assets(
     pr_series: list[tuple[str, list[tuple[float, float]], tuple[int, int, int]]] = []
     ood_models = ((baseline_eval.get("splits") or {}).get("ood_platform_test") or {}).get("models") or {}
     for idx, (mname, mdata) in enumerate(ood_models.items()):
+        if mname == "zero_shot_llm_judge" and int(mdata.get("total_tokens", 0)) == 0:
+            continue
         metrics = mdata.get("metrics") or {}
         rec = float((metrics.get("recall") or {}).get("point", 0.0))
         prec = float((metrics.get("precision") or {}).get("point", 0.0))
@@ -134,23 +136,37 @@ def generate_report_assets(
         pr_series.append(
             (
                 f"{mname} (PR-AUC={pr_auc:.3f})",
-                [(0.0, 1.0), (rec, prec), (1.0, 0.43)],
+                [(0.0, 1.0), (rec, prec), (1.0, 0.41)],
                 palette[idx % len(palette)],
             )
         )
-    if neural_eval.get("status") == "ok":
+    if neural_eval.get("status") in ("ok", "completed"):
         sp = (neural_eval.get("splits") or {}).get("ood_platform_test") or (neural_eval.get("splits") or {}).get("test") or {}
-        if sp:
+        m = sp.get("metrics") or sp
+        if m:
+            rec = float((m.get("recall") or {}).get("point", m.get("recall", 0.0)) if isinstance(m.get("recall"), dict) else m.get("recall", 0.0))
+            prec = float((m.get("precision") or {}).get("point", m.get("precision", 0.0)) if isinstance(m.get("precision"), dict) else m.get("precision", 0.0))
+            pr_auc = float((m.get("pr_auc") or {}).get("point", m.get("pr_auc", 0.0)) if isinstance(m.get("pr_auc"), dict) else m.get("pr_auc", 0.0))
             pr_series.append(
                 (
-                    f"neural (PR-AUC={float(sp.get('pr_auc', 0.0)):.3f})",
-                    [(0.0, 1.0), (float(sp.get("recall", 0.0)), float(sp.get("precision", 0.0)))],
+                    f"neural (PR-AUC={pr_auc:.3f})",
+                    [(0.0, 1.0), (rec, prec), (1.0, 0.41)],
                     palette[2],
+                )
+            )
+    if gnn_eval.get("status") == "ok":
+        gsp = ((gnn_eval.get("splits") or {}).get("ood_platform_test") or (gnn_eval.get("splits") or {}).get("test") or {}).get("phase_c_plus_gnn") or {}
+        if gsp:
+            pr_series.append(
+                (
+                    f"neural+gnn (PR-AUC={float(gsp.get('pr_auc', 0.0)):.3f})",
+                    [(0.0, 1.0), (float(gsp.get("recall", 0.0)), float(gsp.get("precision", 0.0))), (1.0, 0.41)],
+                    palette[3],
                 )
             )
     pr_fig = _draw_line_chart_png(
         figures_dir / "pr_curves.png",
-        f"Precision-Recall Operating Points (seed={seed})",
+        f"Precision-Recall Operating Points (OOD, seed={seed})",
         "Recall",
         "Precision",
         pr_series,
@@ -161,17 +177,26 @@ def generate_report_assets(
     rel_series: list[tuple[str, list[tuple[float, float]], tuple[int, int, int]]] = [
         ("Perfect calibration", [(0.0, 0.0), (1.0, 1.0)], (150, 150, 150))
     ]
-    cal_bins = (neural_eval.get("calibration") or {}).get("val_reliability_bins") or (
-        (gnn_eval.get("calibration") or {}).get("val_reliability_bins") or []
-    )
-    if cal_bins:
+    n_cal = neural_eval.get("calibration") or {}
+    n_bins = n_cal.get("reliability_after") or n_cal.get("val_reliability_bins") or []
+    if n_bins:
         pts = [
-            (float(b["avg_confidence"]), float(b["empirical_accuracy"]))
-            for b in cal_bins
+            (float(b.get("mean_conf", b.get("avg_confidence", 0.0))), float(b.get("empirical_acc", b.get("empirical_accuracy", 0.0))))
+            for b in n_bins
             if int(b.get("count", 0)) > 0
         ]
         if pts:
-            rel_series.append(("Calibrated Model", pts, palette[0]))
+            rel_series.append(("Phase C (Temp-Scaled)", pts, palette[0]))
+    g_cal = gnn_eval.get("calibration") or {}
+    g_bins = g_cal.get("val_reliability_bins") or []
+    if g_bins:
+        pts = [
+            (float(b.get("mean_conf", b.get("avg_confidence", 0.0))), float(b.get("empirical_acc", b.get("empirical_accuracy", 0.0))))
+            for b in g_bins
+            if int(b.get("count", 0)) > 0
+        ]
+        if pts:
+            rel_series.append(("Phase D GNN (Temp-Scaled)", pts, palette[2]))
     rel_fig = _draw_line_chart_png(
         figures_dir / "reliability_diagram.png",
         f"Calibration Reliability Diagram (seed={seed})",
@@ -214,13 +239,21 @@ def generate_report_assets(
         "|---|---|---:|---:|---:|",
     ]
     ablations = neural_eval.get("ablations") or {}
-    if neural_eval.get("status") == "ok" and ablations:
+    if neural_eval.get("status") in ("ok", "completed") and ablations:
         for var_name, vdata in ablations.items():
-            metrics = vdata.get("test") or vdata.get("ood_platform_test") or vdata
-            ablation_lines.append(
-                f"| `{var_name}` | test | {float(metrics.get('pr_auc', 0.0)):.4f} | "
-                f"{float(metrics.get('f1', 0.0)):.4f} | {float(metrics.get('ece', 0.0)):.4f} |"
-            )
+            for sp_lbl in ("test", "ood_platform_test"):
+                metrics = vdata.get(sp_lbl)
+                if not metrics:
+                    continue
+                pr_v = metrics.get("pr_auc", 0.0)
+                f1_v = metrics.get("f1", 0.0)
+                ece_v = metrics.get("ece", 0.0)
+                pr_f = float(pr_v.get("point", 0.0)) if isinstance(pr_v, dict) else float(pr_v)
+                f1_f = float(f1_v.get("point", 0.0)) if isinstance(f1_v, dict) else float(f1_v)
+                ece_f = float(ece_v.get("point", 0.0)) if isinstance(ece_v, dict) else float(ece_v)
+                ablation_lines.append(
+                    f"| `{var_name}` | `{sp_lbl}` | {pr_f:.4f} | {f1_f:.4f} | {ece_f:.4f} |"
+                )
     else:
         ablation_lines.append(
             f"| `(skipped)` | - | - | - | {neural_eval.get('status', 'not_run')} |"
@@ -256,20 +289,29 @@ def generate_report_assets(
             "",
         ]
     )
-    if ood_models:
+    if baseline_eval.get("splits"):
         lines.extend(
             [
                 "| Model | Split | Precision (95% CI) | Recall (95% CI) | F1 (95% CI) | PR-AUC (95% CI) | ECE (95% CI) | Latency (ms/pair) |",
                 "|---|---|---:|---:|---:|---:|---:|---:|",
             ]
         )
-        for mname, mdata in ood_models.items():
-            m = mdata.get("metrics") or {}
-            lines.append(
-                f"| `{mname}` | `ood_platform_test` | {_fmt_ci(m.get('precision'))} | {_fmt_ci(m.get('recall'))} | "
-                f"{_fmt_ci(m.get('f1'))} | {_fmt_ci(m.get('pr_auc'))} | {_fmt_ci(m.get('ece'))} | "
-                f"{float(mdata.get('latency_ms_per_pair', 0.0)):.4f} |"
-            )
+        llm_skipped_note = False
+        for sp_name in ("test", "ood_platform_test"):
+            sp_models = ((baseline_eval.get("splits") or {}).get(sp_name) or {}).get("models") or {}
+            for mname, mdata in sp_models.items():
+                if mname == "zero_shot_llm_judge" and int(mdata.get("total_tokens", 0)) == 0:
+                    llm_skipped_note = True
+                    continue
+                m = mdata.get("metrics") or {}
+                lines.append(
+                    f"| `{mname}` | `{sp_name}` | {_fmt_ci(m.get('precision'))} | {_fmt_ci(m.get('recall'))} | "
+                    f"{_fmt_ci(m.get('f1'))} | {_fmt_ci(m.get('pr_auc'))} | {_fmt_ci(m.get('ece'))} | "
+                    f"{float(mdata.get('latency_ms_per_pair', 0.0)):.4f} |"
+                )
+        if llm_skipped_note:
+            lines.append("")
+            lines.append("- Note: `zero_shot_llm_judge` is omitted because OpenRouter returned HTTP 429 rate-limited (`total_tokens=0`); 0.5 fallback values are not reported.")
     else:
         lines.append("- No Phase B evaluation records found.")
 
@@ -280,10 +322,16 @@ def generate_report_assets(
             f"- Status: `{neural_eval.get('status', 'not_run')}`",
         ]
     )
-    if neural_eval.get("status") == "ok":
-        for sp_name, sp_data in (neural_eval.get("splits") or {}).items():
+    if neural_eval.get("status") in ("ok", "completed"):
+        cal = neural_eval.get("calibration") or {}
+        if cal:
             lines.append(
-                f"- `{sp_name}`: PR-AUC={sp_data.get('pr_auc')}, F1={sp_data.get('f1')}, ECE={sp_data.get('ece')}"
+                f"- Calibration: temperature=`{cal.get('temperature')}`, val ECE before=`{cal.get('val_ece_before')}`, val ECE after=`{cal.get('val_ece_after')}`"
+            )
+        for sp_name, sp_data in (neural_eval.get("splits") or {}).items():
+            m = sp_data.get("metrics") or sp_data
+            lines.append(
+                f"- `{sp_name}`: PR-AUC={_fmt_ci(m.get('pr_auc'))}, F1={_fmt_ci(m.get('f1'))}, ECE={_fmt_ci(m.get('ece'))}, latency={sp_data.get('latency_ms_per_pair', 'N/A')} ms/pair"
             )
     else:
         lines.append(f"- Note: {neural_eval.get('message', 'Train split empty without GITHUB_TOKEN.')}")
@@ -296,13 +344,18 @@ def generate_report_assets(
         ]
     )
     if gnn_eval.get("status") == "ok":
+        gcal = gnn_eval.get("calibration") or {}
+        if gcal:
+            lines.append(
+                f"- Calibration: temperature=`{gcal.get('temperature')}`, val ECE before=`{gcal.get('val_ece_before')}`, val ECE after=`{gcal.get('val_ece_after')}`"
+            )
         for sp_name, sp_data in (gnn_eval.get("splits") or {}).items():
             hvh = sp_data.get("helps_vs_hurts") or {}
             lines.append(
-                f"- `{sp_name}`: Phase C PR-AUC={sp_data['phase_c_alone']['pr_auc']:.4f}, "
-                f"Phase C+GNN PR-AUC={sp_data['phase_c_plus_gnn']['pr_auc']:.4f}, "
-                f"Chain Heuristic PR-AUC={sp_data['chain_confidence_heuristic']['pr_auc']:.4f} "
-                f"(helped={hvh.get('helped_count', 0)}, hurt={hvh.get('hurt_count', 0)})"
+                f"- `{sp_name}`: Phase C PR-AUC={float(sp_data['phase_c_alone'].get('pr_auc', 0.0)):.4f} (F1={float(sp_data['phase_c_alone'].get('f1', 0.0)):.4f}), "
+                f"Phase C+GNN PR-AUC={float(sp_data['phase_c_plus_gnn'].get('pr_auc', 0.0)):.4f} (F1={float(sp_data['phase_c_plus_gnn'].get('f1', 0.0)):.4f}), "
+                f"Chain Heuristic PR-AUC={float(sp_data['chain_confidence_heuristic'].get('pr_auc', 0.0)):.4f} (F1={float(sp_data['chain_confidence_heuristic'].get('f1', 0.0)):.4f}) "
+                f"| helps_vs_hurts: helped={hvh.get('helped_count', 0)}, hurt={hvh.get('hurt_count', 0)}, net={hvh.get('net_gain', 0)}"
             )
     else:
         lines.append(f"- Note: {gnn_eval.get('message', 'Train split empty without GITHUB_TOKEN.')}")
@@ -311,7 +364,7 @@ def generate_report_assets(
         [
             "",
             "## 5. Phase E Contextual Bandit Policy (`scripts/eval_bandit.py`, `data/osint_link/bandit_eval.json`)",
-            f"- Status: `{bandit_eval.get('status', 'not_run')}`",
+            f"- Status: `{bandit_eval.get('status', 'not_run')}` (future work for live agent-run logging)",
         ]
     )
     if bandit_eval.get("status") == "ok":

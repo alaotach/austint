@@ -132,4 +132,6 @@ def test_make_report_assets_on_real_data_dir(tmp_path: Path):
     )
     assert out["status"] == "ok"
     assert results_md.exists()
-    assert "0.7140" in results_md.read_text(encoding="utf-8")
+    txt = results_md.read_text(encoding="utf-8")
+    assert "rule_baseline" in txt
+    assert "0.9250" in txt
