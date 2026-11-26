@@ -249,3 +249,21 @@ body {
     width: 100%;
   }
 }
+
+@media print {
+  .app-header,
+  .nav-rail,
+  .drawer,
+  .btn {
+    display: none !important;
+  }
+
+  .app-shell {
+    display: block;
+  }
+
+  body {
+    background: #ffffff;
+    color: #000000;
+  }
+}

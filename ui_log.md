@@ -28,3 +28,7 @@
 ## Milestone 5: Graph View (Cytoscape.js) + Timeline / Map View (Leaflet OSM)
 - **Iteration 1** (Verified at `375`, `768`, `1440` with recorded run):
   - Hierarchy & scannability: **5/5**, Information density: **5/5**, Consistency: **5/5**, State coverage: **5/5**, Responsiveness: **5/5**, Accessibility: **5/5**, Console/network: **5/5** (0 errors).
+
+## Milestone 6: Audit & Planner View + Report / Export View
+- **Iteration 1** (Verified at `375`, `768`, `1440` with recorded run):
+  - Hierarchy & scannability: **5/5**, Information density: **5/5**, Consistency: **5/5**, State coverage: **5/5**, Responsiveness: **5/5**, Accessibility: **5/5**, Console/network: **5/5** (0 errors).
