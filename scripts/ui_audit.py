@@ -34,6 +34,7 @@ def run_audit(
     views: list[str],
     widths: list[int],
     seed_demo: bool = False,
+    open_inspector: bool = False,
     port: int = 8765,
 ) -> dict[str, Any]:
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -114,6 +115,29 @@ def run_audit(
                         }
                     )
 
+                if open_inspector:
+                    rbtn = page.locator('.nav-item[data-view="results"]')
+                    if rbtn.count() > 0:
+                        rbtn.first.click()
+                        page.wait_for_timeout(200)
+                    card = page.locator(".result-card").first
+                    if card.count() > 0:
+                        card.click()
+                        page.wait_for_timeout(250)
+                        for itab in ("overview", "evidence", "ml", "related", "raw"):
+                            tbtn = page.locator(f'[data-itab="{itab}"]')
+                            if tbtn.count() > 0:
+                                tbtn.first.click()
+                                page.wait_for_timeout(150)
+                        # Return to ML tab for screenshot
+                        ml_btn = page.locator('[data-itab="ml"]')
+                        if ml_btn.count() > 0:
+                            ml_btn.first.click()
+                            page.wait_for_timeout(150)
+                        ishot = out_dir / f"inspector_{w}.png"
+                        page.screenshot(path=str(ishot), full_page=False)
+                        report["checks"].append({"view": "inspector", "width": w, "screenshot": str(ishot)})
+
                 context.close()
             browser.close()
     finally:
@@ -132,6 +156,7 @@ def main() -> int:
     parser.add_argument("--views", type=str, default="launch,scan,results,graph,timeline,audit,report")
     parser.add_argument("--widths", type=str, default="375,768,1440")
     parser.add_argument("--seed-demo", action="store_true")
+    parser.add_argument("--open-inspector", action="store_true")
     parser.add_argument("--port", type=int, default=8765)
     args = parser.parse_args()
 
@@ -140,6 +165,7 @@ def main() -> int:
         views=[v.strip() for v in args.views.split(",") if v.strip()],
         widths=[int(w.strip()) for w in args.widths.split(",") if w.strip()],
         seed_demo=args.seed_demo,
+        open_inspector=args.open_inspector,
         port=args.port,
     )
     print(json.dumps(res, indent=2))
