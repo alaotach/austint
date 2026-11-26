@@ -71,6 +71,7 @@ class JobState:
         self.events: list[dict[str, Any]] = []
         self.subscribers: list[asyncio.Queue] = []
         self.graph_data: dict[str, Any] = {"elements": {"nodes": [], "edges": []}, "stats": {}}
+        self.task: asyncio.Task[Any] | None = None
 
     def append_event(self, event_type: str, details: dict[str, Any]) -> None:
         evt = {
@@ -158,6 +159,7 @@ def format_graph_cytoscape(graph: Any) -> dict[str, Any]:
 
 async def _run_investigation_job(job: JobState, req: InvestigateRequest) -> None:
     """Asynchronous background runner for the OSINT agent investigation."""
+    job.task = asyncio.current_task()
     job.status = "running"
     job.started_at = datetime.now(timezone.utc).isoformat()
     job.append_event("job_started", {"job_id": job.job_id, "params": req.model_dump()})
@@ -272,6 +274,10 @@ async def _run_investigation_job(job: JobState, req: InvestigateRequest) -> None
                 "edges_count": job.graph_data["stats"]["edges_count"],
             },
         )
+    except asyncio.CancelledError:
+        job.status = "stopped"
+        job.completed_at = datetime.now(timezone.utc).isoformat()
+        job.append_event("job_stopped", {"reason": "Force stopped by user"})
     except PermissionError as perm_err:
         job.status = "refused"
         job.error = str(perm_err)
@@ -451,7 +457,7 @@ async def start_investigation(
     job = JobState(job_id=job_id, request_data=req.model_dump())
     JOBS[job_id] = job
 
-    # Launch background async runner
+    # Launch background async runner (job.task is captured via asyncio.current_task inside runner)
     background_tasks.add_task(_run_investigation_job, job, req)
 
     return {
@@ -459,6 +465,33 @@ async def start_investigation(
         "status": "queued",
         "message": "Investigation job dispatched successfully.",
         "created_at": job.created_at,
+    }
+
+
+@app.post("/api/investigate/{job_id}/stop", tags=["Investigation"])
+async def stop_investigation(job_id: str) -> dict[str, Any]:
+    """Force-stop a running or queued investigation job."""
+    job = JOBS.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail=f"Investigation job '{job_id}' not found.")
+
+    if job.status in ("completed", "failed", "refused", "stopped"):
+        return {
+            "job_id": job.job_id,
+            "status": job.status,
+            "message": f"Investigation already {job.status}.",
+        }
+
+    job.status = "stopped"
+    job.completed_at = datetime.now(timezone.utc).isoformat()
+    job.append_event("job_stopped", {"reason": "Force stopped by user"})
+    if job.task is not None and not job.task.done():
+        job.task.cancel()
+
+    return {
+        "job_id": job.job_id,
+        "status": "stopped",
+        "message": "Investigation force stopped.",
     }
 
 

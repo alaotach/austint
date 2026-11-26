@@ -131,6 +131,12 @@ async function submitInvestigation() {
     currentJobId = data.job_id;
     document.getElementById('header-job-id').textContent = currentJobId;
 
+    const stopBtn = document.getElementById('btn-force-stop');
+    if (stopBtn) {
+      stopBtn.style.display = 'block';
+      stopBtn.disabled = false;
+    }
+
     appendLog('INIT', `Dispatched investigation job ${currentJobId}`, 'badge-info');
 
     connectEventStream(currentJobId);
@@ -140,8 +146,37 @@ async function submitInvestigation() {
     alert(`Error: ${err.message}`);
     btn.disabled = false;
     btnText.textContent = 'Start Investigation';
+    const stopBtn = document.getElementById('btn-force-stop');
+    if (stopBtn) stopBtn.style.display = 'none';
     document.getElementById('system-status-dot').className = 'status-dot';
     document.getElementById('system-status-text').textContent = 'Error';
+  }
+}
+
+async function forceStopInvestigation() {
+  if (!currentJobId) return;
+  const stopBtn = document.getElementById('btn-force-stop');
+  if (stopBtn) stopBtn.disabled = true;
+
+  try {
+    const res = await fetch(`/api/investigate/${currentJobId}/stop`, { method: 'POST' });
+    if (res.ok) {
+      appendLog('STOP', `Force stopped investigation job ${currentJobId}`, 'badge-warning');
+    }
+  } catch (err) {
+    appendLog('ALERT', `Force stop request failed: ${err.message}`, 'badge-danger');
+  } finally {
+    if (eventSource) {
+      eventSource.close();
+      eventSource = null;
+    }
+    const btn = document.getElementById('btn-dispatch');
+    const btnText = document.getElementById('btn-dispatch-text');
+    btn.disabled = false;
+    btnText.textContent = 'Start Investigation';
+    if (stopBtn) stopBtn.style.display = 'none';
+    document.getElementById('system-status-dot').className = 'status-dot idle';
+    document.getElementById('system-status-text').textContent = 'Stopped';
   }
 }
 
@@ -198,6 +233,8 @@ function handleLiveEvent(evt) {
   } else if (name === 'job_completed') {
     appendLog('COMPLETE', `Finished: ${data.nodes_count} nodes, ${data.edges_count} edges`, 'badge-success');
     loadGraphData(currentJobId);
+  } else if (name === 'job_stopped') {
+    appendLog('STOP', `${data.reason || 'Investigation force stopped'}`, 'badge-warning');
   } else if (name === 'job_failed' || name === 'job_refused') {
     appendLog('ALERT', `${data.error || 'Job failed'}`, 'badge-danger');
   }
@@ -210,17 +247,21 @@ async function pollJobStatus(jobId) {
       if (!res.ok) return;
       const data = await res.json();
 
-      if (data.status === 'completed' || data.status === 'failed' || data.status === 'refused') {
+      if (data.status === 'completed' || data.status === 'failed' || data.status === 'refused' || data.status === 'stopped') {
         clearInterval(interval);
         const btn = document.getElementById('btn-dispatch');
         const btnText = document.getElementById('btn-dispatch-text');
+        const stopBtn = document.getElementById('btn-force-stop');
         btn.disabled = false;
         btnText.textContent = 'Start Investigation';
+        if (stopBtn) stopBtn.style.display = 'none';
 
-        document.getElementById('system-status-dot').className = 'status-dot';
-        document.getElementById('system-status-text').textContent = 'Ready';
+        document.getElementById('system-status-dot').className = data.status === 'stopped' ? 'status-dot idle' : 'status-dot';
+        document.getElementById('system-status-text').textContent = data.status === 'stopped' ? 'Stopped' : 'Ready';
 
-        loadGraphData(jobId);
+        if (data.status !== 'stopped') {
+          loadGraphData(jobId);
+        }
       }
     } catch (err) {}
   }, 1000);

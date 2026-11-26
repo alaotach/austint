@@ -1817,3 +1817,38 @@ def test_parse_seeds_freetext_fallback_handles_usernames_urls_names() -> None:
     # Email + phrase
     s5 = parse_seeds("Find info for aryanmi2001@gmail.com", client=None)
     assert any(e.entity_type == EntityType.EMAIL and e.value == "aryanmi2001@gmail.com" for e in s5)
+
+
+@pytest.mark.asyncio
+async def test_api_force_stop_investigation() -> None:
+    """POST /api/investigate/{job_id}/stop should cancel a running asyncio task and mark job stopped."""
+    import asyncio
+    from fastapi import HTTPException
+    from osint_agent.api.server import JOBS, JobState, stop_investigation
+
+    job_id = "test_stop_001"
+    job = JobState(job_id=job_id, request_data={"kind": "username", "value": "alaotach"})
+    job.status = "running"
+
+    async def dummy_long_task() -> None:
+        await asyncio.sleep(60)
+
+    job.task = asyncio.create_task(dummy_long_task())
+    JOBS[job_id] = job
+    try:
+        res = await stop_investigation(job_id)
+        assert res["status"] == "stopped"
+        assert job.status == "stopped"
+        assert job.completed_at is not None
+        # Allow cancellation to propagate
+        await asyncio.sleep(0)
+        assert job.task.cancelled()
+
+        # Unknown job should return 404
+        with pytest.raises(HTTPException) as exc_info:
+            await stop_investigation("nonexistent_job")
+        assert exc_info.value.status_code == 404
+    finally:
+        if job.task and not job.task.done():
+            job.task.cancel()
+        JOBS.pop(job_id, None)
