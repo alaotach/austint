@@ -188,6 +188,17 @@ async def _run_investigation_job(job: JobState, req: InvestigateRequest) -> None
             job.append_event("job_failed", {"reason": job.error})
             return
 
+        _SEED_PRIORITY = {
+            EntityType.EMAIL: 0,
+            EntityType.DOMAIN: 1,
+            EntityType.PROFILE: 2,
+            EntityType.USERNAME: 3,
+            EntityType.ORG: 4,
+            EntityType.CONSENTING_PERSON: 5,
+            EntityType.PUBLIC_FIGURE: 6,
+            EntityType.PLACE: 7,
+        }
+        seeds.sort(key=lambda s: _SEED_PRIORITY.get(s.entity_type, 99))
         target_kind = seeds[0].entity_type
         target_value = seeds[0].value
 

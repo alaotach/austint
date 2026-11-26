@@ -1788,3 +1788,32 @@ def test_ml_enrichment_handles_structured_profiles_without_llm() -> None:
     for_llm = rank_profiles_for_llm([structured_hit, unstructured_hit], max_profiles=6)
     assert structured_hit not in for_llm
     assert unstructured_hit in for_llm
+
+
+def test_parse_seeds_freetext_fallback_handles_usernames_urls_names() -> None:
+    """parse_seeds without an LLM must extract usernames, profile URLs, emails, and person names."""
+    from osint_agent.llm.seeds import parse_seeds
+
+    # Bare username
+    s1 = parse_seeds("alaotach", client=None)
+    assert len(s1) == 1
+    assert s1[0].entity_type == EntityType.USERNAME
+    assert s1[0].value == "alaotach"
+
+    # Natural language with handle cue
+    s2 = parse_seeds("Investigate github alaotach", client=None)
+    assert any(e.entity_type == EntityType.USERNAME and e.value == "alaotach" for e in s2)
+
+    # Profile URL
+    s3 = parse_seeds("Check https://github.com/alaotach", client=None)
+    assert any(e.entity_type == EntityType.PROFILE and "github.com/alaotach" in e.value for e in s3)
+
+    # Full name phrase
+    s4 = parse_seeds("Investigate Aryan Mishra", client=None)
+    assert len(s4) == 1
+    assert s4[0].entity_type == EntityType.CONSENTING_PERSON
+    assert s4[0].value == "Aryan Mishra"
+
+    # Email + phrase
+    s5 = parse_seeds("Find info for aryanmi2001@gmail.com", client=None)
+    assert any(e.entity_type == EntityType.EMAIL and e.value == "aryanmi2001@gmail.com" for e in s5)
