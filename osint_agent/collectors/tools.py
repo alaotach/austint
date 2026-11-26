@@ -12,6 +12,7 @@ import sys
 import tempfile
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
+from urllib.parse import urlparse
 
 import httpx
 
@@ -799,25 +800,45 @@ async def collect_sherlock(entity: Entity, client: httpx.AsyncClient) -> list[Hi
                 return []
 
             # Filter out catch-all sites that return HTTP 200 even for a nonexistent username
-            from osint_agent.collectors.stream_checker import _BASELINE_PROBE_USERNAME, _is_bot_or_soft404_response
+            from osint_agent.collectors.stream_checker import (
+                _BASELINE_PROBE_USERNAME,
+                _is_bot_or_soft404_response,
+                load_false_positive_hosts,
+            )
+
+            fp_hosts = load_false_positive_hosts()
 
             async def _verify_sherlock_hit(hit: Hit) -> Hit | None:
                 url = hit.discovered_value
-                if username not in url:
+                host = urlparse(url).netloc.lower()
+                if host in fp_hosts:
+                    return None
+                if username.lower() not in url.lower():
                     return hit
-                probe_url = url.replace(username, _BASELINE_PROBE_USERNAME)
+                probe_url = re.sub(re.escape(username), _BASELINE_PROBE_USERNAME, url, count=1, flags=re.IGNORECASE)
                 try:
-                    resp = await client.get(probe_url, timeout=4.0, follow_redirects=True)
-                    body = resp.text if resp.status_code < 400 else ""
-                    # If the nonexistent-username URL returns 200 (and isn't a bot/soft404 page that proves absence),
-                    # or if the real URL itself is a bot challenge / soft-404, drop it.
-                    if 200 <= resp.status_code < 300:
+                    probe_resp, real_resp = await asyncio.gather(
+                        client.get(probe_url, timeout=4.5, follow_redirects=True),
+                        client.get(url, timeout=4.5, follow_redirects=True),
+                    )
+                    # Real URL must be 200 (not 202 WAF, 403, 404) and not a bot/soft-404/redirect
+                    if real_resp.status_code != 200:
                         return None
-                    if _is_bot_or_soft404_response(resp, body, "status_code"):
-                        # Still check real URL for bot challenge (e.g. LinkedIn recaptcha / Anubis)
-                        real_resp = await client.get(url, timeout=4.0, follow_redirects=True)
-                        if _is_bot_or_soft404_response(real_resp, real_resp.text if real_resp.status_code < 400 else "", "status_code"):
+                    real_body = real_resp.text
+                    if _is_bot_or_soft404_response(real_resp, real_body, "status_code", probe_url=url):
+                        return None
+                    # Baseline URL returning 200 without being caught as soft-404 means catch-all site
+                    if probe_resp.status_code == 200:
+                        probe_body = probe_resp.text
+                        if not _is_bot_or_soft404_response(probe_resp, probe_body, "status_code", probe_url=probe_url):
                             return None
+                        # Same title & near-identical body length -> custom soft-404 page
+                        t1 = re.search(r"<title[^>]*>(.*?)</title>", real_body[:20_000], re.I | re.S)
+                        t2 = re.search(r"<title[^>]*>(.*?)</title>", probe_body[:20_000], re.I | re.S)
+                        if t1 and t2 and t1.group(1).strip().lower() == t2.group(1).strip().lower():
+                            len_diff = abs(len(real_body) - len(probe_body)) / max(1, len(real_body))
+                            if len_diff < 0.03:
+                                return None
                 except Exception:
                     return hit
                 return hit

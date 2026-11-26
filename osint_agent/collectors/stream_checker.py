@@ -20,8 +20,10 @@ logger = logging.getLogger(__name__)
 
 _CACHED_SITES: list[tuple[int, str, dict[str, Any]]] | None = None
 _DEAD_HOSTS_CACHE: dict[str, float] | None = None
+_FALSE_POSITIVE_HOSTS_CACHE: set[str] | None = None
 _DEAD_HOSTS_TTL_SECONDS = 7 * 24 * 3600  # 7 days
 _DEAD_HOSTS_FILE = Path(".osint_dead_hosts.json")
+_FALSE_POSITIVE_SITES_FILE = Path(__file__).resolve().parent / "false_positive_sites.json"
 _BASELINE_PROBE_USERNAME = "zzqwx991827364nonexistent"
 
 _BOT_CHALLENGE_MARKERS = (
@@ -34,6 +36,12 @@ _BOT_CHALLENGE_MARKERS = (
     "<title>just a moment...</title>",
     "attention required! | cloudflare",
     "enable javascript and cookies to continue",
+    "client challenge",
+    "a required part of this site couldn't load",
+    "a required part of this site couldn’t load",
+    "verify you are human",
+    "please enable cookies",
+    "ddos-guard",
 )
 
 _SOFT_404_MARKERS = (
@@ -49,7 +57,56 @@ _SOFT_404_MARKERS = (
     "user does not exist",
     "account doesn't exist",
     "no such user",
+    "user not found",
+    "profile not found",
+    "member not found",
+    "user was not found",
+    "no user found",
+    "couldn't find that user",
+    "could not find that user",
+    "invalid username",
+    "not a valid user",
+    "this account has been suspended",
+    "page cannot be found",
+    "404 not found",
+    "nothing here",
 )
+
+_BAD_FINAL_URL_MARKERS = (
+    "/login",
+    "/signin",
+    "/sign_in",
+    "/signup",
+    "/register",
+    "/notfound",
+    "/not-found",
+    "/404",
+    "/error",
+    "/dashboard",
+    "/verify-human",
+    "authwall",
+    "/.within.website/",
+    "challenge",
+)
+
+
+def load_false_positive_hosts() -> set[str]:
+    """Load curated catch-all / soft-404 host blocklist from false_positive_sites.json."""
+    global _FALSE_POSITIVE_HOSTS_CACHE
+    if _FALSE_POSITIVE_HOSTS_CACHE is not None:
+        return _FALSE_POSITIVE_HOSTS_CACHE
+    hosts: set[str] = set()
+    if _FALSE_POSITIVE_SITES_FILE.exists():
+        try:
+            with open(_FALSE_POSITIVE_SITES_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            for h in data.get("hosts") or []:
+                if isinstance(h, str) and h.strip():
+                    hosts.add(h.strip().lower())
+        except Exception as exc:
+            logger.debug("Could not load false_positive_sites.json: %s", exc)
+    _FALSE_POSITIVE_HOSTS_CACHE = hosts
+    return _FALSE_POSITIVE_HOSTS_CACHE
 
 BROWSER_HEADERS = {
     "User-Agent": (
@@ -167,23 +224,47 @@ def load_maigret_sites() -> list[tuple[int, str, dict[str, Any]]]:
         return []
 
 
-def _is_bot_or_soft404_response(resp: httpx.Response, body: str, ctype: str | None) -> bool:
-    """Detect WAF/bot challenge pages and obvious soft-404 responses returning HTTP 200."""
-    final_url_lower = str(resp.url).lower()
-    if any(marker in final_url_lower for marker in ("/login", "/signin", "authwall", "/.within.website/", "challenge")):
+def _is_bot_or_soft404_response(
+    resp: httpx.Response,
+    body: str,
+    ctype: str | None,
+    probe_url: str | None = None,
+) -> bool:
+    """Detect WAF/bot challenge pages, generic redirects, and soft-404 responses returning HTTP 200."""
+    # Reject 202 Accepted (commonly used by Akamai/WAF challenges)
+    if resp.status_code == 202:
         return True
 
-    snippet = body[:8192].lower()
+    final_parsed = urlparse(str(resp.url).lower())
+    final_url_lower = str(resp.url).lower()
+    if any(marker in final_url_lower for marker in _BAD_FINAL_URL_MARKERS):
+        return True
+
+    # If probe_url had a specific profile path (e.g. /user/foo) and redirected to root homepage (/), it's a catch-all
+    if probe_url:
+        orig_path = urlparse(probe_url.lower()).path.strip("/")
+        final_path = final_parsed.path.strip("/")
+        if orig_path and not final_path:
+            return True
+
+    snippet = body[:65_536].lower()
     if any(marker in snippet for marker in _BOT_CHALLENGE_MARKERS):
         return True
 
-    if ctype in ("status_code", "response_url"):
-        if any(marker in snippet for marker in _SOFT_404_MARKERS):
+    if any(marker in snippet for marker in _SOFT_404_MARKERS):
+        return True
+
+    if "application/json" in resp.headers.get("content-type", "").lower():
+        compact = re.sub(r"\s+", "", body.strip()).lower()
+        if (
+            compact in ("{}", "[]", "null", "")
+            or '"users":{}' in compact
+            or '"users":[]' in compact
+            or '"data":null' in compact
+            or '"user":null' in compact
+            or '"success":false' in compact
+        ):
             return True
-        if "application/json" in resp.headers.get("content-type", "").lower():
-            stripped = body.strip()
-            if stripped in ("{}", "[]", "null", "") or '"users":{}' in stripped or '"users":[]' in stripped:
-                return True
 
     return False
 
@@ -213,14 +294,14 @@ async def _probe_site(
             follow_redirects=(ctype != "response_url"),
         )
         body = resp.text if resp.status_code < 400 else ""
-        if _is_bot_or_soft404_response(resp, body, ctype):
+        if _is_bot_or_soft404_response(resp, body, ctype, probe_url=probe_url):
             return None
 
         matched = False
         if ctype == "status_code":
             matched = resp.status_code == 200
         elif ctype == "message":
-            if resp.status_code < 400:
+            if resp.status_code == 200:
                 abs_strs = cfg.get("absenceStrs") or []
                 pres_strs = cfg.get("presenseStrs") or []
                 if not any(s in body for s in abs_strs):
@@ -229,7 +310,7 @@ async def _probe_site(
                     elif abs_strs:
                         matched = True
         elif ctype == "response_url":
-            matched = 200 <= resp.status_code < 300
+            matched = resp.status_code == 200
 
         if not matched:
             return None
@@ -298,6 +379,7 @@ async def stream_username_check(
         return []
 
     dead_hosts = _load_dead_hosts()
+    fp_hosts = load_false_positive_hosts()
     newly_dead: dict[str, float] = {}
 
     filtered: list[tuple[str, dict[str, Any]]] = []
@@ -305,7 +387,7 @@ async def stream_username_check(
 
     for _, name, cfg in all_sites:
         host = cfg.get("host") or urlparse(cfg.get("urlProbe", "")).netloc.lower()
-        if host and host in dead_hosts:
+        if host and (host in dead_hosts or host in fp_hosts):
             skipped_dead += 1
             continue
 
@@ -370,6 +452,9 @@ async def stream_username_check(
                 baseline_hit = await _probe_site(client, name, cfg, _BASELINE_PROBE_USERNAME, target_id)
                 if baseline_hit is not None:
                     logger.debug("Filtered catch-all false positive site %s (%s)", name, hit.discovered_value)
+                    bhost = cfg.get("host", "")
+                    if bhost:
+                        newly_dead[bhost] = time.time()
                     return None
                 return hit
 

@@ -1910,3 +1910,40 @@ async def test_tool_exa_search_returns_hits_and_never_retries_on_402() -> None:
         assert call_count == 1
     finally:
         reset_exa_state()
+
+
+def test_stream_checker_filters_soft404_202_redirects_and_blocklist() -> None:
+    """_is_bot_or_soft404_response and load_false_positive_hosts should block catch-all 200/202/soft-404 sites."""
+    from osint_agent.collectors.stream_checker import _is_bot_or_soft404_response, load_false_positive_hosts
+
+    fp = load_false_positive_hosts()
+    assert "last.fm" in fp
+    assert "www.7cups.com" in fp
+    assert "houzz.com" in fp
+
+    # 202 Accepted WAF challenge
+    r_202 = httpx.Response(202, request=httpx.Request("GET", "https://www.7cups.com/@test"))
+    assert _is_bot_or_soft404_response(r_202, "<html></html>", "status_code") is True
+
+    # Redirect to root homepage
+    r_root = httpx.Response(200, request=httpx.Request("GET", "https://www.nitrotype.com/"))
+    assert _is_bot_or_soft404_response(
+        r_root, "<html>Home</html>", "status_code", probe_url="https://www.nitrotype.com/racer/test"
+    ) is True
+
+    # Redirect to /notfound or /dashboard
+    r_nf = httpx.Response(200, request=httpx.Request("GET", "https://likee.video/notfound"))
+    assert _is_bot_or_soft404_response(r_nf, "<html>Not found</html>", "status_code") is True
+
+    # Deep soft-404 marker past 8KB
+    deep_body = ("x" * 12000) + "<div>User not found</div>"
+    r_deep = httpx.Response(200, request=httpx.Request("GET", "https://example.org/u/test"))
+    assert _is_bot_or_soft404_response(r_deep, deep_body, "message") is True
+
+    # Empty JSON with spaces
+    r_json = httpx.Response(
+        200,
+        headers={"content-type": "application/json"},
+        request=httpx.Request("GET", "https://www.freelancer.com/api/users"),
+    )
+    assert _is_bot_or_soft404_response(r_json, '{"result": {"users": {} }}', "status_code") is True
