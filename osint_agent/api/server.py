@@ -211,10 +211,13 @@ async def _run_investigation_job(job: JobState, req: InvestigateRequest) -> None
         return
 
     # 2. Configure Resolver
-    if req.resolver in ("learned", "neural"):
+    if req.resolver in ("learned", "neural", "neural_gnn"):
         model_path = Path(req.model_path)
         if model_path.exists():
-            if req.resolver == "neural":
+            if req.resolver == "neural_gnn":
+                from osint_agent.ml.gnn import NeuralGNNResolver
+                resolver = NeuralGNNResolver.load(model_path)
+            elif req.resolver == "neural":
                 from osint_agent.ml.neural import NeuralResolver
                 resolver = NeuralResolver.load(model_path)
             else:

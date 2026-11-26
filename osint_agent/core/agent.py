@@ -369,6 +369,12 @@ class OSINTAgent:
 
             discover_ml_profile_relations(graph)
             await synthesize_profile_relations(graph)
+            if hasattr(self.resolver, "refine_graph"):
+                self.resolver.refine_graph(graph)
+                self.audit.log_event(
+                    "gnn_graph_refined",
+                    {"total_nodes": graph.number_of_nodes(), "total_edges": graph.number_of_edges()},
+                )
 
             self.audit.log_event(
                 "investigation_finished",
