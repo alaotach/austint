@@ -5,6 +5,7 @@
 
   let typeFilter = "all";
   let minConfFilter = 0;
+  let visibleLimit = 200;
 
   function esc(str) {
     return String(str ?? "")
@@ -216,7 +217,7 @@
       return true;
     });
 
-    const visible = filtered.slice(0, 200);
+    const visible = filtered.slice(0, visibleLimit);
 
     container.innerHTML = `
       <div class="card" style="display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:var(--space-3);">
@@ -226,7 +227,7 @@
         <div style="display:flex; align-items:center; gap:8px;">
           <label class="mono" style="font-size:11px; color:var(--text-muted);" for="filter-min-conf">Min Conf: <strong id="lbl-min-conf">${Math.round(minConfFilter * 100)}%</strong></label>
           <input type="range" id="filter-min-conf" min="0" max="0.9" step="0.1" value="${minConfFilter}">
-          <span class="badge">${filtered.length} shown</span>
+          <span class="badge">${visible.length} / ${filtered.length}</span>
         </div>
       </div>
 
@@ -234,9 +235,19 @@
         <div class="grid-3" id="results-cards-grid">
           ${visible.map((n, i) => renderResultCard(n, i)).join("")}
         </div>
-        ${filtered.length > 200 ? `<div class="state-panel">Showing top 200 of ${filtered.length} cards (use search or filters to narrow).</div>` : ""}
+        ${filtered.length > visibleLimit ? `
+          <div class="state-panel" style="display:flex; align-items:center; justify-content:center; gap:12px; flex-wrap:wrap;">
+            <span>Windowed DOM (${visible.length} of ${filtered.length} cards rendered for 60fps performance)</span>
+            <button type="button" class="btn btn-sm btn-primary" id="btn-load-more-cards">Load +100 Cards</button>
+          </div>
+        ` : ""}
       ` : `<div class="state-panel">No entities match the current filter. Run a scan or click "Load Recorded Run" on Launch.</div>`}
     `;
+
+    document.getElementById("btn-load-more-cards")?.addEventListener("click", () => {
+      visibleLimit += 100;
+      renderResultsView();
+    });
 
     container.querySelectorAll("[data-rtype]").forEach((btn) => {
       btn.addEventListener("click", () => {

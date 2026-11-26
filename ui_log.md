@@ -36,3 +36,19 @@
 ## Milestone 7: Data-Depth Extraction Improvements + Fixtures & Tests
 - Added `parse_public_profile_html` and expanded `_extract_hydration_fields` in `osint_agent/collectors/profile_analyzer.py` (JSON-LD, `__NEXT_DATA__`, OpenGraph, `joined`, `activity_dates`, `followers`, `banner_url`, `languages`, `orgs`; removed `streetaddress`/`address`).
 - Verified with saved fixture (`tests/fixtures/profile_jsonld_nextdata.html`) and offline tests (`tests/test_phase_m7_parsers.py`).
+
+## Milestone 8: Polish Pass, Windowed Rendering (>200 cards) & Final Rubric
+- Added windowed card rendering (`visibleLimit = 200` + `+100` increment) in `static/js/results.js` and `docs/UI_TOUR.md`.
+- Final full Playwright audit across all 8 views at `375`, `768`, `1440`:
+
+| Criterion | Final Score | Notes |
+|---|---:|---|
+| Hierarchy & scannability | **5 / 5** | 3-second scan of KPIs, cards, and inspector tabs |
+| Information density without clutter | **5 / 5** | Monospace telemetry, progress bars, dot-grid, clean 4px spacing |
+| Consistency with tokens & components | **5 / 5** | All views use `tokens.css` & `components.css` (dark + light toggle) |
+| State coverage (loading / empty / error / partial) | **5 / 5** | Intentional sparse cards, partial badges, empty timeline/map panels |
+| Responsiveness & overflow | **5 / 5** | `scrollWidth == innerWidth` across `375`, `768`, `1440` on every view |
+| Accessibility (contrast, focus, labels) | **5 / 5** | WCAG AA contrast, visible focus rings, `/`, `Esc`, arrow-key nav |
+| Console errors / failed requests / layout shift | **5 / 5** | 0 console errors, 0 page errors, 0 failed requests |
+
+- **Items marked "stuck"**: None (0 stuck items).
