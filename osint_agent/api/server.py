@@ -113,21 +113,103 @@ class InvestigateRequest(BaseModel):
     max_llm_calls: int = Field(20, ge=1, le=100, description="Budget for LLM operations")
 
 
+COLLECTOR_METADATA: dict[str, dict[str, Any]] = {
+    "sherlock": {"category": "Username & Social", "expected_fields": ["username", "url", "site"]},
+    "maigret": {"category": "Username & Social", "expected_fields": ["username", "name", "bio", "location", "joined", "followers", "links", "avatar", "banner", "activity_dates", "site"]},
+    "playstore_intel": {"category": "Username & Social", "expected_fields": ["name", "developer", "url", "description", "rating"]},
+    "github_code_intel": {"category": "Code & Dev", "expected_fields": ["username", "name", "bio", "location", "joined", "followers", "links", "avatar", "pinned_repos", "languages", "orgs"]},
+    "email_intel": {"category": "Email & Identity", "expected_fields": ["email", "username", "name", "avatar", "links", "pgp_key"]},
+    "domain_intel": {"category": "Domains & Infra", "expected_fields": ["domain", "registrar", "created", "nameservers", "subdomains", "ip"]},
+    "crtsh": {"category": "Domains & Infra", "expected_fields": ["domain", "subdomains", "issuer", "not_before", "not_after"]},
+    "exa_search": {"category": "Open Data & Web", "expected_fields": ["title", "url", "snippet", "published_date", "author"]},
+    "web_archive_crawl": {"category": "Open Data & Web", "expected_fields": ["url", "timestamps", "snapshots"]},
+    "open_data_intel": {"category": "Open Data & Web", "expected_fields": ["title", "url", "date", "source", "summary"]},
+    "wikidata": {"category": "Orgs & Places", "expected_fields": ["name", "description", "url", "links", "location"]},
+    "nominatim": {"category": "Orgs & Places", "expected_fields": ["name", "lat", "lon", "country", "type"]},
+    "threat_intel": {"category": "Threat & Security", "expected_fields": ["indicator", "tags", "asn", "country"]},
+    "breach_intel": {"category": "Threat & Security", "expected_fields": ["username", "stealer_family", "date_compromised"]},
+}
+
+
+def compute_field_coverage(source_tool: str, entity_type: str, attrs: dict[str, Any]) -> dict[str, Any]:
+    """Compute per-node extracted vs expected public field coverage."""
+    meta = COLLECTOR_METADATA.get(source_tool)
+    if meta:
+        expected = list(meta["expected_fields"])
+    elif entity_type == "profile":
+        expected = ["username", "name", "bio", "location", "joined", "followers", "links", "avatar", "banner", "orgs", "activity_dates"]
+    elif entity_type == "domain":
+        expected = ["domain", "registrar", "created", "nameservers", "ip"]
+    elif entity_type == "email":
+        expected = ["email", "username", "name", "links"]
+    else:
+        expected = ["name", "url", "description", "location"]
+
+    alias_map = {
+        "name": ["name", "display_name", "title"],
+        "links": ["links", "linked_urls", "website", "url"],
+        "avatar": ["avatar", "avatar_url"],
+        "banner": ["banner", "banner_url"],
+        "joined": ["joined", "created_at", "created"],
+        "activity_dates": ["activity_dates", "updated_at", "last_active", "published_date"],
+        "pinned_repos": ["pinned_repos", "repos", "public_repos"],
+        "lat": ["lat", "latitude"],
+        "lon": ["lon", "longitude"],
+    }
+
+    present: list[str] = []
+    missing: list[str] = []
+    for field in expected:
+        keys = alias_map.get(field, [field])
+        has_val = False
+        for k in keys:
+            v = attrs.get(k)
+            if v is not None and v != "" and v != [] and v != {}:
+                has_val = True
+                break
+        if has_val:
+            present.append(field)
+        else:
+            missing.append(field)
+
+    total = len(expected)
+    count = len(present)
+    ratio = round(count / total, 2) if total else 0.0
+    return {
+        "extracted_count": count,
+        "expected_count": total,
+        "ratio": ratio,
+        "present_fields": present,
+        "missing_fields": missing,
+        "is_partial": count < total,
+        "is_sparse": count <= 2,
+    }
+
+
 def format_graph_cytoscape(graph: Any) -> dict[str, Any]:
     """Convert NetworkX DiGraph into Cytoscape.js compatible graph structure."""
     nodes = []
     edges = []
 
     for node_id, attrs in graph.nodes(data=True):
+        node_attrs = dict(attrs.get("attributes", {}))
+        prov = list(attrs.get("provenance", []))
+        src_tool = node_attrs.get("source_tool") or (prov[-1].split(":")[0] if prov else "")
+        etype = str(attrs.get("entity_type", "unknown"))
+        cov = compute_field_coverage(str(src_tool), etype, node_attrs)
         nodes.append({
             "data": {
                 "id": str(node_id),
                 "label": str(attrs.get("value", node_id)),
-                "type": str(attrs.get("entity_type", "unknown")),
+                "type": etype,
                 "confidence": round(float(attrs.get("confidence", 1.0)), 4),
+                "gnn_confidence": attrs.get("gnn_confidence"),
+                "phase_c_score": attrs.get("phase_c_score"),
+                "chain_confidence": attrs.get("chain_confidence"),
                 "depth": int(attrs.get("depth", 0)),
-                "provenance": list(attrs.get("provenance", [])),
-                "attributes": dict(attrs.get("attributes", {})),
+                "provenance": prov,
+                "attributes": node_attrs,
+                "field_coverage": cov,
             }
         })
 
@@ -305,6 +387,42 @@ async def _run_investigation_job(job: JobState, req: InvestigateRequest) -> None
 # ---------------------------------------------------------------------------
 # API Routes
 # ---------------------------------------------------------------------------
+
+@app.get("/api/collectors", tags=["System"])
+async def list_collectors() -> dict[str, Any]:
+    """Return registered collectors with category and expected field coverage schemas."""
+    items = []
+    for name, tool in TOOL_REGISTRY.items():
+        meta = COLLECTOR_METADATA.get(name, {})
+        items.append(
+            {
+                "name": name,
+                "description": tool.description,
+                "supported_types": [t.value for t in tool.target_types],
+                "category": meta.get("category", "General"),
+                "expected_fields": meta.get("expected_fields", ["name", "url", "description"]),
+            }
+        )
+    return {"count": len(items), "collectors": items}
+
+
+@app.get("/api/demo-runs", tags=["System"])
+async def list_recorded_runs() -> dict[str, Any]:
+    """List recorded local audit_job_*.jsonl files for offline UI replay."""
+    root = Path(__file__).resolve().parent.parent.parent
+    runs = []
+    for p in sorted(root.glob("audit_job_*.jsonl"))[:10]:
+        events = []
+        for line in p.read_text(encoding="utf-8", errors="ignore").splitlines():
+            if line.strip():
+                try:
+                    events.append(json.loads(line))
+                except Exception:
+                    pass
+        if events:
+            runs.append({"file": p.name, "events_count": len(events), "events": events[:200]})
+    return {"runs": runs}
+
 
 @app.get("/api/health", tags=["System"])
 async def health_check() -> dict[str, Any]:
