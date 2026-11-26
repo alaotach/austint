@@ -42,6 +42,21 @@ Agentic OSINT"*.
   hashed `person_id` so **no person appears in more than one split**.
 - **Out-of-distribution (OOD) split**: Specific platforms (`mastodon`, `devto`)
   are held out from training/validation to measure zero-shot platform transfer.
-- **Label noise**: Weak supervision introduces noise (e.g., abandoned links,
-  shared org accounts, bots). A manual audit sample of 100 pairs is used to
-  estimate and report the empirical label-noise rate.
+- **Label noise from weak supervision**: Self-declared cross-platform links can
+  still contain stale/abandoned domains, shared team/org accounts, or automated
+  mirrors. A manual audit sample of 100 pairs (`scripts/osint_link_stats.py`)
+  is provided to estimate empirical label noise rather than assuming 0% noise.
+- **Platform bias**: Public developer and fediverse communities (GitHub,
+  Mastodon, Dev.to, personal blogs) over-represent technical open-source
+  maintainers and English-language profiles; models trained here should not be
+  assumed to generalize to non-technical populations without domain validation.
+- **Small dataset & crawl constraints**: Unauthenticated crawling is tightly
+  rate-limited (`>= 1.0s`/domain) and GitHub search/API quotas without
+  `GITHUB_TOKEN` yielded only 84 public profiles / 114 OOD pairs in the local
+  snapshot (`train=0`, `test=0`), preventing real-data supervised training until
+  a full authenticated crawl is executed.
+- **Privacy & dual-use considerations**: Even public-only OSINT aggregation can
+  pose correlation/doxxing risks if misused. To mitigate harm, this project
+  enforces explicit authorization consent (`Scope.consent_confirmed`), audit
+  logging, feature-only exports (no raw bios/photos), and strict refusal of
+  non-public or sensitive attributes.
