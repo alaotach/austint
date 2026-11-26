@@ -409,8 +409,45 @@
       resetCollectorStatus();
       window.OSINT_STATE.jobId = run.file.replace("audit_", "").replace(".jsonl", "");
       window.OSINT_STATE.auditEvents = [];
+      const nodesMap = {};
+      const edgesList = [];
       document.getElementById("header-job-id").textContent = window.OSINT_STATE.jobId;
-      (run.events || []).forEach(handleEvent);
+      (run.events || []).forEach((ev) => {
+        handleEvent(ev);
+        if (ev.event === "hit_evaluated" && ev.details) {
+          const d = ev.details;
+          const id = `${d.discovered_type || "node"}:${d.discovered_value}`;
+          if (!nodesMap[id]) {
+            nodesMap[id] = {
+              data: {
+                id,
+                label: d.discovered_value,
+                type: d.discovered_type || "profile",
+                confidence: Number(d.child_confidence ?? d.resolver_score ?? 0.5),
+                depth: 1,
+                provenance: [`${d.tool || "collector"}:discovered`],
+                attributes: { source_tool: d.tool || "", resolver_score: d.resolver_score },
+              },
+            };
+          }
+          edgesList.push({
+            data: {
+              id: `e_${edgesList.length}`,
+              source: d.parent_id || "seed:target",
+              target: id,
+              relation: d.accepted ? "confirmed" : "rejected",
+              score: Number(d.resolver_score ?? 0.5),
+              source_tool: d.tool || "unknown",
+            },
+          });
+        }
+      });
+      window.OSINT_STATE.nodes = Object.values(nodesMap);
+      window.OSINT_STATE.edges = edgesList;
+      document.getElementById("header-node-count").textContent = String(window.OSINT_STATE.nodes.length);
+      document.getElementById("header-edge-count").textContent = String(window.OSINT_STATE.edges.length);
+      document.getElementById("nav-badge-results").textContent = String(window.OSINT_STATE.nodes.length);
+      if (typeof window.onGraphUpdated === "function") window.onGraphUpdated();
       setSystemStatus("completed", "Recorded Run");
       if (switchToScan) window.OSINT_UI.switchView("scan");
     } catch (_) {}

@@ -13,11 +13,37 @@
   - Accessibility (contrast, focus, labels): **5/5**
   - Console errors / failed requests / layout shift: **5/5** (0 errors)
 
+## Milestone 3: Result Cards + Completeness Meters + Partial States
+- **Iteration 1**:
+  - Defect found at `375px`: `white-space: nowrap` on `Missing: ...` caused `article.result-card` to overflow the CSS Grid track and clip the confidence ring. Also raw `breach:`/`infostealer:` labels were visible in recorded runs.
+  - Fix: Added `min-width: 0; max-width: 100%; overflow: hidden;` on `.card` in `static/css/components.css` and masked sensitive `breach:`/`infostealer:` labels in `static/js/results.js`.
+- **Iteration 2** (Verified at `375`, `768`, `1440`):
+  - Hierarchy & scannability: **5/5**
+  - Information density without clutter: **5/5**
+  - Consistency with tokens & components: **5/5**
+  - State coverage (loading/empty/error/partial): **5/5**
+  - Responsiveness & overflow: **5/5** (`scrollWidth == innerWidth` at `375`, `768`, `1440`)
+  - Accessibility (contrast, focus, labels): **5/5**
+  - Console errors / failed requests / layout shift: **5/5** (0 errors)
+
 ## Milestone 2: Launch Screen + Live Scan View
 - **Iteration 1**:
   - Defect found: `/api/collectors` returned HTTP 500 due to `tool.supported_types` instead of `tool.target_types`. Also 7 collectors fell into `"General"` category.
   - Fix: Fixed `tool.target_types` in `osint_agent/api/server.py` and mapped all 14 exact `TOOL_REGISTRY` names in `COLLECTOR_METADATA`.
 - **Iteration 2** (Verified at `375`, `768`, `1440` with recorded run):
+  - Hierarchy & scannability: **5/5**
+  - Information density without clutter: **5/5**
+  - Consistency with tokens & components: **5/5**
+  - State coverage (loading/empty/error/partial): **5/5**
+  - Responsiveness & overflow: **5/5** (`scrollWidth == innerWidth` at `375`, `768`, `1440`)
+  - Accessibility (contrast, focus, labels): **5/5**
+  - Console errors / failed requests / layout shift: **5/5** (0 errors)
+
+## Milestone 3: Result Cards + Completeness Meters + Partial States
+- **Iteration 1**:
+  - Defect found at `375px`: `white-space: nowrap` on `Missing: ...` caused `article.result-card` to overflow the CSS Grid track and clip the confidence ring. Also raw `breach:`/`infostealer:` labels were visible in recorded runs.
+  - Fix: Added `min-width: 0; max-width: 100%; overflow: hidden;` on `.card` in `static/css/components.css` and masked sensitive `breach:`/`infostealer:` labels in `static/js/results.js`.
+- **Iteration 2** (Verified at `375`, `768`, `1440`):
   - Hierarchy & scannability: **5/5**
   - Information density without clutter: **5/5**
   - Consistency with tokens & components: **5/5**
