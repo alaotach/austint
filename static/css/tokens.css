@@ -1,0 +1,91 @@
+/* Design Tokens: Intelligent OSINT (Dark default + Light toggle) */
+
+:root {
+  /* Fonts */
+  --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-mono: "JetBrains Mono", "Fira Code", "SFMono-Regular", Consolas, monospace;
+
+  /* 4px Spacing Scale */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+
+  /* Radii */
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-pill: 999px;
+
+  /* Dark Theme Surfaces (WCAG AA compliant) */
+  --bg-canvas: #090d14;
+  --bg-surface: #0f1623;
+  --bg-elevated: #161f30;
+  --bg-hover: #1d283d;
+  --bg-dot: rgba(148, 163, 184, 0.14);
+
+  /* Text */
+  --text-primary: #f1f5f9;
+  --text-secondary: #cbd5e1;
+  --text-muted: #94a3b8;
+
+  /* Borders */
+  --border-subtle: #1e293b;
+  --border-strong: #334155;
+
+  /* Single Primary Accent */
+  --accent: #38bdf8;
+  --accent-strong: #0ea5e9;
+  --accent-soft: rgba(56, 189, 248, 0.14);
+  --accent-contrast: #04121f;
+
+  /* Semantic Status Colors */
+  --confirmed: #22c55e;
+  --confirmed-soft: rgba(34, 197, 94, 0.16);
+  --rejected: #ef4444;
+  --rejected-soft: rgba(239, 68, 68, 0.16);
+  --uncertain: #f59e0b;
+  --uncertain-soft: rgba(245, 158, 11, 0.16);
+  --error: #f87171;
+  --error-soft: rgba(248, 113, 113, 0.16);
+
+  /* Focus & Elevation */
+  --focus-ring: 0 0 0 2px #090d14, 0 0 0 4px #38bdf8;
+  --shadow-drawer: -8px 0 32px rgba(0, 0, 0, 0.55);
+}
+
+[data-theme="light"] {
+  --bg-canvas: #f8fafc;
+  --bg-surface: #ffffff;
+  --bg-elevated: #f1f5f9;
+  --bg-hover: #e2e8f0;
+  --bg-dot: rgba(15, 23, 42, 0.1);
+
+  --text-primary: #0f172a;
+  --text-secondary: #334155;
+  --text-muted: #475569;
+
+  --border-subtle: #e2e8f0;
+  --border-strong: #cbd5e1;
+
+  --accent: #0284c7;
+  --accent-strong: #0369a1;
+  --accent-soft: rgba(2, 132, 199, 0.12);
+  --accent-contrast: #ffffff;
+
+  --confirmed: #15803d;
+  --confirmed-soft: rgba(21, 128, 61, 0.12);
+  --rejected: #b91c1c;
+  --rejected-soft: rgba(185, 28, 28, 0.12);
+  --uncertain: #b45309;
+  --uncertain-soft: rgba(180, 83, 9, 0.12);
+  --error: #dc2626;
+  --error-soft: rgba(220, 38, 38, 0.12);
+
+  --focus-ring: 0 0 0 2px #ffffff, 0 0 0 4px #0284c7;
+  --shadow-drawer: -8px 0 32px rgba(15, 23, 42, 0.16);
+}
