@@ -2047,3 +2047,70 @@ async def test_image_intel_vision_and_web_search_with_avatar_match() -> None:
     assert profile_hit.metadata.get("visual_similarity", 0) >= 0.9
     assert profile_hit.metadata.get("avatar_match") is True
     assert any(s.entity_type == EntityType.USERNAME and s.value == "alaotach" for s in res["discovered_seeds"])
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_reverse_image_search_yandex_parses_cbir_sites() -> None:
+    """reverse_image_search_yandex should upload image bytes, parse CbirSites JSON, and filter spam domains."""
+    import html as _html
+    import io
+    from PIL import Image
+    from osint_agent.collectors.image_intel import reverse_image_search_yandex
+
+    buf = io.BytesIO()
+    Image.new("RGB", (32, 32), color=(10, 20, 30)).save(buf, format="JPEG")
+    img_bytes = buf.getvalue()
+
+    respx.post("https://yandex.com/images/search").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "blocks": [
+                    {
+                        "params": {
+                            "cbirId": "12345/abcde",
+                            "originalImageUrl": "https://avatars.mds.yandex.net/get-images-cbir/12345/abcde/orig",
+                        }
+                    }
+                ]
+            },
+        )
+    )
+
+    state_json = json.dumps(
+        {
+            "initialState": {
+                "cbirSites": {
+                    "sites": [
+                        {
+                            "title": "Spam Cam",
+                            "url": "https://xhamsterlive.com/user1?utm_source=yandexsmartcamera",
+                            "domain": "xhamsterlive.com",
+                        },
+                        {
+                            "title": "adityachechani (Aditya Chechani) - GitHub",
+                            "url": "https://github.com/adityachechani?utm_medium=organic&utm_source=yandexsmartcamera",
+                            "domain": "github.com",
+                            "description": "Computer Vision & ML",
+                            "thumb": {"url": "//avatars.mds.yandex.net/i?id=123"},
+                        },
+                    ]
+                }
+            }
+        }
+    )
+    respx.get("https://yandex.com/images/search").mock(
+        return_value=httpx.Response(
+            200,
+            text=f'<html><body><div data-state="{_html.escape(state_json)}"></div></body></html>',
+        )
+    )
+
+    async with httpx.AsyncClient() as client:
+        hits = await reverse_image_search_yandex(img_bytes, "test.jpg", "profile:image:test.jpg", client)
+
+    assert len(hits) == 1
+    assert hits[0].discovered_value == "https://github.com/adityachechani"
+    assert hits[0].metadata["title"] == "adityachechani (Aditya Chechani) - GitHub"
+    assert hits[0].metadata["thumbnail_url"] == "https://avatars.mds.yandex.net/i?id=123"

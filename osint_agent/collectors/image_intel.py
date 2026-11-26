@@ -332,6 +332,144 @@ async def analyze_image_vision(
         return {}
 
 
+async def reverse_image_search_yandex(
+    image_bytes: bytes,
+    filename: str | None,
+    target_id: str,
+    client: httpx.AsyncClient,
+    max_results: int = 10,
+) -> list[Hit]:
+    """Upload image bytes to Yandex CBIR and parse matching web pages from CbirSites JSON."""
+    import html as _html
+    import json
+    import re
+    from urllib.parse import parse_qsl, quote, urlencode, urlparse, urlunparse
+
+    cbir_headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
+        ),
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+
+    def _clean_yandex_url(raw_url: str) -> str:
+        p = urlparse(raw_url)
+        kept = [(k, v) for k, v in parse_qsl(p.query, keep_blank_values=True) if k not in ("utm_source", "utm_medium")]
+        return urlunparse((p.scheme, p.netloc, p.path, p.params, urlencode(kept), p.fragment))
+
+    def _find_sites(obj: Any) -> list[dict[str, Any]]:
+        if isinstance(obj, dict):
+            if "sites" in obj and isinstance(obj["sites"], list):
+                return [s for s in obj["sites"] if isinstance(s, dict)]
+            for v in obj.values():
+                res = _find_sites(v)
+                if res:
+                    return res
+        elif isinstance(obj, list):
+            for v in obj:
+                res = _find_sites(v)
+                if res:
+                    return res
+        return []
+
+    hits: list[Hit] = []
+    try:
+        upload_resp = await client.post(
+            'https://yandex.com/images/search?rpt=imageview&format=json&request=%7B%22blocks%22%3A%5B%7B%22block%22%3A%22b-page_type_search-by-image__link%22%7D%5D%7D',
+            headers=cbir_headers,
+            files={"upfile": (filename or "image.jpg", image_bytes, "image/jpeg")},
+            follow_redirects=True,
+            timeout=15.0,
+        )
+        if upload_resp.status_code != 200:
+            return []
+        up_data = upload_resp.json()
+        cbir_id = ""
+        for blk in up_data.get("blocks") or []:
+            if isinstance(blk, dict):
+                cbir_id = str((blk.get("params") or {}).get("cbirId") or "")
+                if cbir_id:
+                    break
+        if not cbir_id:
+            return []
+
+        sites_resp = await client.get(
+            f"https://yandex.com/images/search?rpt=imageview&cbir_id={quote(cbir_id, safe='/')}&cbir_page=sites",
+            headers=cbir_headers,
+            follow_redirects=True,
+            timeout=15.0,
+        )
+        if sites_resp.status_code != 200 or "showcaptcha" in str(sites_resp.url).lower():
+            return []
+
+        sites: list[dict[str, Any]] = []
+        for m in re.finditer(r'data-state="([^"]+)"', sites_resp.text):
+            raw_state = _html.unescape(m.group(1))
+            if "CbirSites" in raw_state or '"sites"' in raw_state:
+                try:
+                    parsed = json.loads(raw_state)
+                    sites = _find_sites(parsed)
+                    if sites:
+                        break
+                except Exception:
+                    continue
+
+        _SKIP_CBIR_DOMAINS = ("xhamster", "stripchat", "xlivesex", "chaturbate", "pornhub", "xvideos")
+        seen_urls: set[str] = set()
+        domain_counts: dict[str, int] = {}
+        for s in sites:
+            raw_u = str(s.get("url") or "").strip()
+            if not raw_u.startswith(("http://", "https://")):
+                continue
+            clean_u = _clean_yandex_url(raw_u)
+            if clean_u in seen_urls:
+                continue
+            dom = str(s.get("domain") or urlparse(clean_u).netloc.lower()).lower()
+            if any(bad in dom for bad in _SKIP_CBIR_DOMAINS):
+                continue
+            if domain_counts.get(dom, 0) >= 2:
+                continue
+            seen_urls.add(clean_u)
+            domain_counts[dom] = domain_counts.get(dom, 0) + 1
+
+            title = str(s.get("title") or "").strip()
+            desc = str(s.get("description") or "").strip()
+            thumb_u = str(((s.get("thumb") or {}).get("url")) or "").strip()
+            if thumb_u.startswith("//"):
+                thumb_u = "https:" + thumb_u
+
+            hits.append(
+                Hit(
+                    target_entity_id=target_id,
+                    discovered_type=EntityType.PROFILE,
+                    discovered_value=clean_u,
+                    relation="reverse_image_match",
+                    source_tool="yandex_cbir",
+                    is_trusted=False,
+                    raw_data={
+                        "site": dom,
+                        "url": clean_u,
+                        "title": title,
+                        "description": f"{title} — {desc}".strip(" —")[:300],
+                    },
+                    metadata={
+                        "site": dom,
+                        "url": clean_u,
+                        "title": title,
+                        "bio": desc[:400] if desc else title,
+                        **({"thumbnail_url": thumb_u} if thumb_u.startswith("http") else {}),
+                    },
+                )
+            )
+            if len(hits) >= max_results:
+                break
+    except Exception as exc:
+        logger.debug("Yandex CBIR reverse image search failed: %s", exc)
+
+    return hits
+
+
 async def search_image_web(
     image_bytes: bytes,
     filename: str | None,
@@ -340,8 +478,9 @@ async def search_image_web(
     target_id: str,
     client: httpx.AsyncClient,
 ) -> dict[str, Any]:
-    """Run web search (Exa + DuckDuckGo + Wikipedia), scrape discovered profiles, and score avatar similarity."""
+    """Run reverse image search (Yandex CBIR) + text web search (Exa + DDG + Wiki), scrape profiles, and score avatar similarity."""
     import asyncio
+    import re
     from urllib.parse import quote, urlparse
     from osint_agent.collectors.extractor import extract_entities
     from osint_agent.collectors.profile_analyzer import analyze_profiles_batch
@@ -357,6 +496,17 @@ async def search_image_web(
         if ent.id not in seen_seed_ids:
             seen_seed_ids.add(ent.id)
             discovered_seeds.append(ent)
+
+    # 0. Real Reverse Image Search via Yandex CBIR (works with zero EXIF & zero LLM)
+    cbir_hits = await reverse_image_search_yandex(image_bytes, filename, target_id, client, max_results=10)
+    for ch in cbir_hits:
+        if ch.discovered_value not in seen_urls:
+            seen_urls.add(ch.discovered_value)
+            hits.append(ch)
+            # Extract GitHub/Dev.to/social handles directly from matched profile URLs
+            gh_m = re.match(r"^https?://(?:www\.)?github\.com/([a-zA-Z0-9_-]+)/?$", ch.discovered_value, re.I)
+            if gh_m:
+                _add_seed(Entity.create(EntityType.USERNAME, gh_m.group(1), confidence=0.85, provenance=["yandex_cbir"]))
 
     # 1. Gather entity clues from EXIF, PNG text chunks, filename, and Vision LLM
     clue_texts: list[str] = []
@@ -475,10 +625,10 @@ async def search_image_web(
 
     # 4. Scrape discovered web profiles & compare their avatars visually against uploaded image
     if hits:
-        await analyze_profiles_batch(hits, client, max_profiles=8, concurrency=6)
+        await analyze_profiles_batch(hits, client, max_profiles=10, concurrency=6)
         avatar_checks: list[tuple[Hit, str]] = []
         for h in hits:
-            av = str(h.metadata.get("avatar_url") or "")
+            av = str(h.metadata.get("avatar_url") or h.metadata.get("thumbnail_url") or "")
             if av.startswith("http"):
                 avatar_checks.append((h, av))
         if avatar_checks:
