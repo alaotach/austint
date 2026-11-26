@@ -199,30 +199,43 @@ async def _analyze_github_repo(owner: str, repo: str, client: httpx.AsyncClient)
                     code_targets.append(str(item["download_url"]))
                     seen_paths.add(str(item.get("path") or item.get("name") or "").lower())
 
-        _CODE_EXTS = (".py", ".js", ".ts", ".tsx", ".jsx", ".html", ".json", ".yaml", ".yml", ".toml", ".gradle", ".xml", ".md")
-        _HIGH_SIGNAL_PATH_RE = re.compile(
-            r"(?:cname|funding\.yml|package\.json|pyproject\.toml|androidmanifest\.xml|build\.gradle|pubspec\.yaml|app\.json|"
-            r"(?:^|/)(?:config|constants|about|contact|footer|author|profile|settings|main|app|index)\.[^/]+$)",
+        _CODE_EXTS = (".py", ".js", ".ts", ".tsx", ".jsx", ".html", ".json", ".yaml", ".yml", ".toml", ".gradle", ".kts", ".xml", ".md")
+        _MANIFEST_PATH_RE = re.compile(
+            r"(?:cname|funding\.yml|package\.json|pyproject\.toml|androidmanifest\.xml|build\.gradle(?:\.kts)?|pubspec\.yaml|app\.json)$",
             re.IGNORECASE,
         )
+        _HIGH_SIGNAL_PATH_RE = re.compile(
+            r"(?:^|/)(?:config|constants|about|contact|footer|author|profile|settings|main|app|index)\.[^/]+$",
+            re.IGNORECASE,
+        )
+        _SKIP_DIRS = ("node_modules/", "venv/", ".git/", ".idea/", ".vscode/", "gradle/wrapper/", "build/", "dist/", "__pycache__/")
         if isinstance(tree_r, httpx.Response) and tree_r.status_code == 200:
             tree_items = tree_r.json().get("tree") or []
             tree_paths = [str(it.get("path") or "") for it in tree_items if isinstance(it, dict) and it.get("type") == "blob"]
             if tree_paths:
                 excerpt_parts.append("Files: " + ", ".join(tree_paths[:25]))
+            manifest_candidates: list[str] = []
+            code_candidates: list[str] = []
             for p in tree_paths:
                 pl = p.lower()
-                if pl in seen_paths or "node_modules/" in pl or "venv/" in pl or ".git/" in pl:
+                if pl in seen_paths or any(sd in pl for sd in _SKIP_DIRS):
                     continue
-                if pl.endswith(_CODE_EXTS) and _HIGH_SIGNAL_PATH_RE.search(pl):
+                if not pl.endswith(_CODE_EXTS):
+                    continue
+                if _MANIFEST_PATH_RE.search(pl):
                     seen_paths.add(pl)
-                    code_targets.append(f"https://raw.githubusercontent.com/{owner}/{repo}/HEAD/{p}")
-                    if len(code_targets) >= 6:
-                        break
+                    manifest_candidates.append(f"https://raw.githubusercontent.com/{owner}/{repo}/HEAD/{p}")
+                elif _HIGH_SIGNAL_PATH_RE.search(pl):
+                    seen_paths.add(pl)
+                    code_candidates.append(f"https://raw.githubusercontent.com/{owner}/{repo}/HEAD/{p}")
+            for u in manifest_candidates + code_candidates:
+                code_targets.append(u)
+                if len(code_targets) >= 10:
+                    break
 
         if code_targets:
             code_resps = await asyncio.gather(
-                *(client.get(u, timeout=4.0) for u in code_targets[:6]),
+                *(client.get(u, timeout=4.0) for u in code_targets[:10]),
                 return_exceptions=True,
             )
             for cr in code_resps:
