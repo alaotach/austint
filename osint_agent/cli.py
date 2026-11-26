@@ -63,8 +63,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--resolver",
         type=str,
         default="baseline",
-        choices=["baseline", "learned"],
-        help="Entity resolver backend (baseline heuristics or trained model)",
+        choices=["baseline", "learned", "neural"],
+        help="Entity resolver backend (baseline heuristics, learned logreg, or neural multimodal)",
     )
     parser.add_argument(
         "--model-path",
@@ -126,13 +126,17 @@ async def main_async(args: argparse.Namespace) -> int:
 
     from osint_agent.ml.resolver import BaselineWeightedResolver, LearnedResolver
 
-    if args.resolver == "learned":
+    if args.resolver in ("learned", "neural"):
         model_p = Path(args.model_path)
         if not model_p.exists():
             print(f"\n[ERROR] Model checkpoint not found: {model_p}", file=sys.stderr)
             print("Train a model or specify a valid checkpoint with --model-path.\n", file=sys.stderr)
             return 2
-        resolver = LearnedResolver.load(model_p)
+        if args.resolver == "neural":
+            from osint_agent.ml.neural import NeuralResolver
+            resolver = NeuralResolver.load(model_p)
+        else:
+            resolver = LearnedResolver.load(model_p)
     else:
         resolver = BaselineWeightedResolver()
 

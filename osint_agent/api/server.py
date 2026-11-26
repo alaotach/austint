@@ -211,10 +211,14 @@ async def _run_investigation_job(job: JobState, req: InvestigateRequest) -> None
         return
 
     # 2. Configure Resolver
-    if req.resolver == "learned":
+    if req.resolver in ("learned", "neural"):
         model_path = Path(req.model_path)
         if model_path.exists():
-            resolver = LearnedResolver.load(model_path)
+            if req.resolver == "neural":
+                from osint_agent.ml.neural import NeuralResolver
+                resolver = NeuralResolver.load(model_path)
+            else:
+                resolver = LearnedResolver.load(model_path)
         else:
             job.append_event("model_not_found_fallback", {"path": str(model_path), "action": "fallback_baseline"})
             resolver = BaselineWeightedResolver()
