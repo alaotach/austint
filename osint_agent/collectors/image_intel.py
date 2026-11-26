@@ -416,8 +416,10 @@ async def reverse_image_search_yandex(
                     continue
 
         _SKIP_CBIR_DOMAINS = ("xhamster", "stripchat", "xlivesex", "chaturbate", "pornhub", "xvideos")
+        _MIN_CBIR_SIM = 0.72
         seen_urls: set[str] = set()
         domain_counts: dict[str, int] = {}
+        candidates: list[Hit] = []
         for s in sites:
             raw_u = str(s.get("url") or "").strip()
             if not raw_u.startswith(("http://", "https://")):
@@ -439,7 +441,7 @@ async def reverse_image_search_yandex(
             if thumb_u.startswith("//"):
                 thumb_u = "https:" + thumb_u
 
-            hits.append(
+            candidates.append(
                 Hit(
                     target_entity_id=target_id,
                     discovered_type=EntityType.PROFILE,
@@ -462,8 +464,31 @@ async def reverse_image_search_yandex(
                     },
                 )
             )
-            if len(hits) >= max_results:
+            if len(candidates) >= max_results * 2:
                 break
+
+        # Verify perceptual similarity against uploaded image so visually similar strangers are rejected
+        if candidates:
+            import asyncio as _asyncio
+
+            async def _score_cbir(c_hit: Hit) -> Hit | None:
+                tu = str(c_hit.metadata.get("thumbnail_url") or "")
+                if not tu:
+                    return None
+                sim = await compare_reference_to_avatar_url(image_bytes, tu, client)
+                if sim >= _MIN_CBIR_SIM:
+                    c_hit.metadata["visual_similarity"] = sim
+                    c_hit.metadata["avatar_match"] = sim >= 0.78
+                    c_hit.is_trusted = sim >= 0.78
+                    return c_hit
+                return None
+
+            scored = await _asyncio.gather(*(_score_cbir(ch) for ch in candidates), return_exceptions=True)
+            for res in scored:
+                if isinstance(res, Hit):
+                    hits.append(res)
+                    if len(hits) >= max_results:
+                        break
     except Exception as exc:
         logger.debug("Yandex CBIR reverse image search failed: %s", exc)
 
@@ -497,16 +522,17 @@ async def search_image_web(
             seen_seed_ids.add(ent.id)
             discovered_seeds.append(ent)
 
-    # 0. Real Reverse Image Search via Yandex CBIR (works with zero EXIF & zero LLM)
+    # 0. Real Reverse Image Search via Yandex CBIR (only high-similarity matches >= 0.72)
     cbir_hits = await reverse_image_search_yandex(image_bytes, filename, target_id, client, max_results=10)
     for ch in cbir_hits:
         if ch.discovered_value not in seen_urls:
             seen_urls.add(ch.discovered_value)
             hits.append(ch)
-            # Extract GitHub/Dev.to/social handles directly from matched profile URLs
-            gh_m = re.match(r"^https?://(?:www\.)?github\.com/([a-zA-Z0-9_-]+)/?$", ch.discovered_value, re.I)
-            if gh_m:
-                _add_seed(Entity.create(EntityType.USERNAME, gh_m.group(1), confidence=0.85, provenance=["yandex_cbir"]))
+            # Only promote social handles from CBIR if visual similarity is high (>= 0.78)
+            if float(ch.metadata.get("visual_similarity") or 0.0) >= 0.78:
+                gh_m = re.match(r"^https?://(?:www\.)?github\.com/([a-zA-Z0-9_-]+)/?$", ch.discovered_value, re.I)
+                if gh_m:
+                    _add_seed(Entity.create(EntityType.USERNAME, gh_m.group(1), confidence=0.85, provenance=["yandex_cbir"]))
 
     # 1. Gather entity clues from EXIF, PNG text chunks, filename, and Vision LLM
     clue_texts: list[str] = []

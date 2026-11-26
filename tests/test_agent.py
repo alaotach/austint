@@ -2106,6 +2106,9 @@ async def test_reverse_image_search_yandex_parses_cbir_sites() -> None:
             text=f'<html><body><div data-state="{_html.escape(state_json)}"></div></body></html>',
         )
     )
+    respx.get("https://avatars.mds.yandex.net/i?id=123").mock(
+        return_value=httpx.Response(200, content=img_bytes)
+    )
 
     async with httpx.AsyncClient() as client:
         hits = await reverse_image_search_yandex(img_bytes, "test.jpg", "profile:image:test.jpg", client)
@@ -2114,3 +2117,4 @@ async def test_reverse_image_search_yandex_parses_cbir_sites() -> None:
     assert hits[0].discovered_value == "https://github.com/adityachechani"
     assert hits[0].metadata["title"] == "adityachechani (Aditya Chechani) - GitHub"
     assert hits[0].metadata["thumbnail_url"] == "https://avatars.mds.yandex.net/i?id=123"
+    assert hits[0].metadata["visual_similarity"] >= 0.72
