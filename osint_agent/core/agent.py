@@ -34,6 +34,7 @@ class OSINTAgent:
         planner: Planner | None = None,
         audit_path: str | Path = "audit.jsonl",
         http_client: httpx.AsyncClient | None = None,
+        policy_log_path: str | Path | None = None,
     ) -> None:
         self.resolver = resolver or BaselineWeightedResolver()
         self.audit = AuditLogger(audit_path)
@@ -41,6 +42,8 @@ class OSINTAgent:
             audit_path=audit_path, audit_callback=self.audit.log_event
         )
         self.http_client = http_client
+        self.policy_log_path = Path(policy_log_path) if policy_log_path else None
+        self.policy_transitions: list[dict[str, Any]] = []
 
     async def run(self, scope: Scope) -> nx.DiGraph:
         """Run the knowledge graph expansion loop for a given investigation scope."""
@@ -141,6 +144,23 @@ class OSINTAgent:
 
                     current_entity.attributes.setdefault("_tools_run", []).append(step.tool_name)
                     tool_call_count += 1
+                    nodes_before = graph.number_of_nodes()
+                    from osint_agent.ml.bandit import extract_state_features
+
+                    state_snapshot = {
+                        "entity_type": current_entity.entity_type.value,
+                        "confidence": current_entity.confidence,
+                        "depth": current_entity.depth,
+                        "nodes_count": nodes_before,
+                        "edges_count": graph.number_of_edges(),
+                        "remaining_budget": max(0, scope.max_tool_calls - tool_call_count + 1),
+                    }
+                    state_vec = extract_state_features(
+                        current_entity,
+                        {"nodes_count": nodes_before, "edges_count": graph.number_of_edges()},
+                        state_snapshot["remaining_budget"],
+                        max_budget=max(scope.max_tool_calls, 1),
+                    ).tolist()
                     self.audit.log_event(
                         "tool_call_started",
                         {
@@ -159,6 +179,19 @@ class OSINTAgent:
                             "tool_call_error",
                             {"tool": tool.name, "entity_id": current_entity.id, "error": str(err)},
                         )
+                        transition = {
+                            "state": state_snapshot,
+                            "state_vec": state_vec,
+                            "tool": tool.name,
+                            "cost": 1.0,
+                            "reward": 0.0,
+                        }
+                        self.policy_transitions.append(transition)
+                        self.audit.log_event("policy_transition", transition)
+                        if self.policy_log_path:
+                            self.policy_log_path.parent.mkdir(parents=True, exist_ok=True)
+                            with open(self.policy_log_path, "a", encoding="utf-8") as pf:
+                                pf.write(json.dumps(transition) + "\n")
                         continue
 
                     self.audit.log_event(
@@ -366,6 +399,21 @@ class OSINTAgent:
                                                 lead_entity,
                                             ),
                                         )
+
+                    newly_confirmed = max(0, graph.number_of_nodes() - nodes_before)
+                    transition = {
+                        "state": state_snapshot,
+                        "state_vec": state_vec,
+                        "tool": tool.name,
+                        "cost": 1.0,
+                        "reward": float(newly_confirmed),
+                    }
+                    self.policy_transitions.append(transition)
+                    self.audit.log_event("policy_transition", transition)
+                    if self.policy_log_path:
+                        self.policy_log_path.parent.mkdir(parents=True, exist_ok=True)
+                        with open(self.policy_log_path, "a", encoding="utf-8") as pf:
+                            pf.write(json.dumps(transition) + "\n")
 
             discover_ml_profile_relations(graph)
             await synthesize_profile_relations(graph)

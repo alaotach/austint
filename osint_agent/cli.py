@@ -76,8 +76,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--planner",
         type=str,
         default="rule",
-        choices=["rule", "llm"],
-        help="Tool execution planner: rule (RuleBasedPlanner) or llm (LLMPlanner)",
+        choices=["rule", "llm", "bandit"],
+        help="Tool execution planner: rule (RuleBasedPlanner), llm (LLMPlanner), or bandit (BanditPlanner)",
+    )
+    parser.add_argument(
+        "--bandit-path",
+        type=str,
+        default="models/bandit_policy.json",
+        help="Path to trained contextual bandit policy JSON for --planner bandit",
     )
     parser.add_argument(
         "--llm-provider",
@@ -150,6 +156,12 @@ async def main_async(args: argparse.Namespace) -> int:
         from osint_agent.llm.client import get_llm_client
         client = get_llm_client(provider=args.llm_provider, call_budget=args.max_llm_calls)
         planner = LLMPlanner(client=client, audit_path=args.audit_out)
+    elif args.planner == "bandit":
+        from osint_agent.ml.bandit import BanditPlanner, ContextualBanditPolicy
+
+        b_path = Path(args.bandit_path)
+        policy = ContextualBanditPolicy.load(b_path) if b_path.exists() else ContextualBanditPolicy()
+        planner = BanditPlanner(policy=policy, audit_path=args.audit_out)
     else:
         planner = RuleBasedPlanner(audit_path=args.audit_out)
 
