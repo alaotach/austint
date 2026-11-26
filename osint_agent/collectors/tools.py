@@ -2337,3 +2337,143 @@ async def collect_breach_intel(entity: Entity, client: httpx.AsyncClient) -> lis
         logger.debug("Hudson Rock username lookup failed for %s: %s", username, exc)
 
     return hits
+
+
+# ---------------------------------------------------------------------------
+# Exa AI Web Search Collector (via Hack Club proxy or direct Exa API)
+# ---------------------------------------------------------------------------
+
+_EXA_402_BLOCKED: bool = False
+_EXA_COOLDOWN_UNTIL: float = 0.0
+
+
+def reset_exa_state() -> None:
+    """Reset Exa 402/429 circuit-breaker state (primarily for tests)."""
+    global _EXA_402_BLOCKED, _EXA_COOLDOWN_UNTIL
+    _EXA_402_BLOCKED = False
+    _EXA_COOLDOWN_UNTIL = 0.0
+
+
+@register_tool(
+    name="exa_search",
+    target_types=[
+        EntityType.USERNAME,
+        EntityType.EMAIL,
+        EntityType.PUBLIC_FIGURE,
+        EntityType.CONSENTING_PERSON,
+        EntityType.ORG,
+        EntityType.DOMAIN,
+    ],
+    description=(
+        "Uses Exa AI neural/keyword web search to find public profiles, apps, mentions, "
+        "and page text for an email, username, person, org, or domain. Never retries on 402/429."
+    ),
+)
+async def collect_exa_search(entity: Entity, client: httpx.AsyncClient) -> list[Hit]:
+    """Query Exa /search once for the entity and emit PROFILE hits with page text; fail fast on 402/429."""
+    global _EXA_402_BLOCKED, _EXA_COOLDOWN_UNTIL
+    import time
+    from osint_agent.llm.client import _load_dotenv
+
+    if _EXA_402_BLOCKED or time.monotonic() < _EXA_COOLDOWN_UNTIL:
+        return []
+
+    _load_dotenv()
+    api_key = os.getenv("EXA_API_KEY") or os.getenv("OPENROUTER_API_KEY", "")
+    if not api_key:
+        return []
+
+    val = entity.value.strip()
+    if not val or len(val) < 2:
+        return []
+
+    if entity.entity_type == EntityType.DOMAIN:
+        query = f'site:{val} OR "{val}"'
+    else:
+        query = f'"{val}"'
+
+    base_url = os.getenv("EXA_BASE_URL", "https://ai.hackclub.com/proxy/v1/exa").rstrip("/")
+    search_url = f"{base_url}/search"
+
+    hits: list[Hit] = []
+    try:
+        resp = await client.post(
+            search_url,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "query": query,
+                "numResults": 5,
+                "contents": {"text": {"maxCharacters": 800}},
+            },
+            timeout=12.0,
+        )
+
+        # NEVER retry on 402 (allowance/credits exhausted) — disable for session
+        if resp.status_code == 402:
+            _EXA_402_BLOCKED = True
+            logger.warning("Exa returned 402 Payment Required — disabling Exa without retrying.")
+            return []
+
+        # NEVER retry on 429 — trip cooldown immediately
+        if resp.status_code == 429:
+            _EXA_COOLDOWN_UNTIL = time.monotonic() + 120.0
+            logger.warning("Exa returned 429 Too Many Requests — cooling down 120s without retrying.")
+            return []
+
+        if resp.status_code != 200:
+            logger.debug("Exa search HTTP %d for %s", resp.status_code, val)
+            return []
+
+        data = resp.json()
+        results = data.get("results") or []
+        seen_urls: set[str] = set()
+        for res in results[:5]:
+            if not isinstance(res, dict):
+                continue
+            url = str(res.get("url") or "").strip()
+            if not url.startswith(("http://", "https://")) or url in seen_urls:
+                continue
+            seen_urls.add(url)
+
+            title = str(res.get("title") or "").strip()
+            author = str(res.get("author") or "").strip()
+            pub_date = str(res.get("publishedDate") or "").strip()
+            text_excerpt = str(res.get("text") or "").strip()[:800]
+
+            from urllib.parse import urlparse
+            site = urlparse(url).netloc.lower()
+
+            hits.append(
+                Hit(
+                    target_entity_id=entity.id,
+                    discovered_type=EntityType.PROFILE,
+                    discovered_value=url,
+                    relation="web_mention",
+                    source_tool="exa_search",
+                    is_trusted=False,
+                    raw_data={
+                        "site": site,
+                        "url": url,
+                        "title": title,
+                        "author": author,
+                        "published_date": pub_date,
+                        "description": f"{title} — {text_excerpt[:300]}" if title else text_excerpt[:300],
+                        "_page_text_excerpt": text_excerpt,
+                    },
+                    metadata={
+                        "site": site,
+                        "url": url,
+                        "title": title,
+                        "bio": text_excerpt[:400] if text_excerpt else title,
+                        **({"name": author} if author else {}),
+                        **({"published_date": pub_date} if pub_date else {}),
+                    },
+                )
+            )
+    except (httpx.HTTPError, httpx.TimeoutException, ValueError) as exc:
+        logger.debug("Exa search failed for %s: %s", val, exc)
+
+    return hits

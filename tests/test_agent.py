@@ -1852,3 +1852,61 @@ async def test_api_force_stop_investigation() -> None:
         if job.task and not job.task.done():
             job.task.cancel()
         JOBS.pop(job_id, None)
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_tool_exa_search_returns_hits_and_never_retries_on_402() -> None:
+    """exa_search should emit PROFILE hits from /search results and permanently short-circuit on 402 without retrying."""
+    from unittest.mock import patch
+    from osint_agent.collectors.tools import collect_exa_search, reset_exa_state
+
+    reset_exa_state()
+    try:
+        respx.post("https://ai.hackclub.com/proxy/v1/exa/search").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "results": [
+                        {
+                            "title": "ELI5: Explain Text Anywhere - Apps on Google Play",
+                            "url": "https://play.google.com/store/apps/details?id=com.alaotach.eli5",
+                            "author": "AlAoTach Inc.",
+                            "publishedDate": "2026-01-01T00:00:00.000Z",
+                            "text": "ELI5 is an AI text explainer built by Aryan Mishra.",
+                        }
+                    ],
+                    "costDollars": {"total": 0.008},
+                },
+            )
+        )
+
+        entity = Entity.create(entity_type=EntityType.USERNAME, value="alaotach")
+        with patch.dict("os.environ", {"EXA_API_KEY": "test-exa-key"}):
+            async with httpx.AsyncClient() as client:
+                hits = await collect_exa_search(entity, client)
+
+        assert len(hits) == 1
+        assert hits[0].discovered_value == "https://play.google.com/store/apps/details?id=com.alaotach.eli5"
+        assert hits[0].metadata["name"] == "AlAoTach Inc."
+        assert "Aryan Mishra" in hits[0].metadata["bio"]
+
+        # Now test 402: must NOT retry and must block subsequent calls
+        call_count = 0
+
+        def side_effect_402(request):
+            nonlocal call_count
+            call_count += 1
+            return httpx.Response(402, json={"error": "Payment Required"})
+
+        respx.post("https://ai.hackclub.com/proxy/v1/exa/search").mock(side_effect=side_effect_402)
+        with patch.dict("os.environ", {"EXA_API_KEY": "test-exa-key"}):
+            async with httpx.AsyncClient() as client:
+                hits_402 = await collect_exa_search(entity, client)
+                hits_after = await collect_exa_search(entity, client)
+
+        assert hits_402 == []
+        assert hits_after == []
+        assert call_count == 1
+    finally:
+        reset_exa_state()
