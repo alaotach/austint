@@ -1947,3 +1947,103 @@ def test_stream_checker_filters_soft404_202_redirects_and_blocklist() -> None:
         request=httpx.Request("GET", "https://www.freelancer.com/api/users"),
     )
     assert _is_bot_or_soft404_response(r_json, '{"result": {"users": {} }}', "status_code") is True
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_image_intel_vision_and_web_search_with_avatar_match() -> None:
+    """analyze_image_vision + search_image_web should identify clues, query Exa/DDG/Wiki, and score avatar similarity."""
+    import io
+    from unittest.mock import patch
+    from PIL import Image
+    from osint_agent.collectors.image_intel import analyze_image_vision, search_image_web
+    from osint_agent.llm.client import OpenRouterClient
+
+    # Create a tiny valid PNG/JPEG image
+    buf = io.BytesIO()
+    Image.new("RGB", (64, 64), color=(30, 144, 255)).save(buf, format="JPEG")
+    img_bytes = buf.getvalue()
+
+    # Mock Vision LLM
+    respx.post("https://ai.hackclub.com/proxy/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(
+                                {
+                                    "visual_description": "Developer avatar for alaotach",
+                                    "visible_text": "alaotach",
+                                    "detected_names": ["Aryan Mishra"],
+                                    "detected_usernames": ["alaotach"],
+                                    "detected_emails": [],
+                                    "detected_domains": [],
+                                    "detected_organizations": ["EryzaLabs"],
+                                    "landmarks_or_locations": [],
+                                    "search_queries": ["Aryan Mishra alaotach"],
+                                }
+                            )
+                        }
+                    }
+                ],
+                "usage": {"total_tokens": 50},
+            },
+        )
+    )
+
+    llm = OpenRouterClient(api_key="test-key", call_budget=5)
+    vision_info = await analyze_image_vision(img_bytes, filename="avatar.jpg", meta={}, llm_client=llm)
+    assert "alaotach" in vision_info["detected_usernames"]
+    assert "Aryan Mishra" in vision_info["detected_names"]
+
+    # Mock Exa, DuckDuckGo, Wikipedia, and target profile + matching avatar image
+    respx.post("https://ai.hackclub.com/proxy/v1/exa/search").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "results": [
+                    {
+                        "title": "Aryan Mishra (alaotach) - Portfolio",
+                        "url": "https://example-dev-bio.org/alaotach",
+                        "author": "Aryan Mishra",
+                        "text": "Aryan Mishra builds AI and Android apps.",
+                    }
+                ]
+            },
+        )
+    )
+    respx.get("https://api.duckduckgo.com/").mock(return_value=httpx.Response(200, json={"AbstractURL": ""}))
+    respx.get("https://en.wikipedia.org/w/api.php").mock(return_value=httpx.Response(200, json={"query": {"search": []}}))
+    respx.get("https://example-dev-bio.org/robots.txt").mock(return_value=httpx.Response(404))
+    respx.get("https://example-dev-bio.org/alaotach").mock(
+        return_value=httpx.Response(
+            200,
+            headers={"content-type": "text/html"},
+            text=(
+                '<html><head><meta property="og:image" content="https://example-dev-bio.org/avatar.jpg" /></head>'
+                '<body><main><h1>Aryan Mishra</h1><p>Developer at EryzaLabs.</p></main></body></html>'
+            ),
+        )
+    )
+    respx.get("https://example-dev-bio.org/avatar.jpg").mock(
+        return_value=httpx.Response(200, content=img_bytes)
+    )
+
+    with patch.dict("os.environ", {"EXA_API_KEY": "test-exa-key"}):
+        async with httpx.AsyncClient() as client:
+            res = await search_image_web(
+                image_bytes=img_bytes,
+                filename="avatar.jpg",
+                meta={},
+                vision_info=vision_info,
+                target_id="profile:image:avatar.jpg",
+                client=client,
+            )
+
+    assert len(res["hits"]) >= 1
+    profile_hit = next(h for h in res["hits"] if "example-dev-bio.org" in h.discovered_value)
+    assert profile_hit.metadata.get("visual_similarity", 0) >= 0.9
+    assert profile_hit.metadata.get("avatar_match") is True
+    assert any(s.entity_type == EntityType.USERNAME and s.value == "alaotach" for s in res["discovered_seeds"])

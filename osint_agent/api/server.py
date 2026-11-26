@@ -358,8 +358,10 @@ async def analyze_image_endpoint(
     import httpx
     import networkx as nx
     from osint_agent.collectors.image_intel import (
+        analyze_image_vision,
         extract_image_metadata,
         reverse_geocode_and_overpass,
+        search_image_web,
     )
 
     image_bytes = await file.read()
@@ -375,6 +377,17 @@ async def analyze_image_endpoint(
 
     graph = nx.DiGraph()
     seed_id = f"profile:image:{file.filename or job_id}"
+
+    # 1. Multimodal Vision analysis (extracts OCR text, names, handles, emails, search queries)
+    vision_info = await analyze_image_vision(image_bytes, filename=file.filename, meta=meta)
+    if vision_info:
+        if vision_info.get("visual_description"):
+            meta["visual_description"] = vision_info["visual_description"]
+        if vision_info.get("visible_text"):
+            meta["visible_text"] = vision_info["visible_text"]
+        if vision_info.get("search_queries"):
+            meta["search_queries"] = vision_info["search_queries"]
+
     graph.add_node(
         seed_id,
         entity_type="profile",
@@ -396,23 +409,102 @@ async def analyze_image_endpoint(
         graph.add_node(art_id, entity_type="username", value=meta["artist"], confidence=0.9, depth=1, provenance=["exif"])
         graph.add_edge(seed_id, art_id, relation="exif_artist", score=0.9, source_tool="image_intel")
 
-    gps = meta.get("gps")
-    if gps:
-        async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient() as client:
+        gps = meta.get("gps")
+        if gps:
             geo_hits = await reverse_geocode_and_overpass(gps["lat"], gps["lon"], seed_id, client)
-        for h in geo_hits:
-            gid = f"place:{h.discovered_value}"
-            if gid not in graph:
+            for h in geo_hits:
+                gid = f"place:{h.discovered_value}"
+                if gid not in graph:
+                    graph.add_node(
+                        gid,
+                        entity_type=h.discovered_type.value,
+                        value=h.discovered_value,
+                        confidence=1.0,
+                        depth=1,
+                        provenance=["image_intel:gps"],
+                        attributes=h.raw_data,
+                    )
+                graph.add_edge(seed_id, gid, relation=h.relation, score=1.0, source_tool="image_intel")
+
+        # 2. Image Web Search (Exa + DuckDuckGo + Wikipedia + profile scraping + visual avatar similarity)
+        web_res = await search_image_web(
+            image_bytes=image_bytes,
+            filename=file.filename,
+            meta=meta,
+            vision_info=vision_info,
+            target_id=seed_id,
+            client=client,
+        )
+        for seed in web_res.get("discovered_seeds") or []:
+            if seed.id not in graph:
                 graph.add_node(
-                    gid,
-                    entity_type=h.discovered_type.value,
-                    value=h.discovered_value,
-                    confidence=1.0,
+                    seed.id,
+                    entity_type=seed.entity_type.value,
+                    value=seed.value,
+                    confidence=seed.confidence,
                     depth=1,
-                    provenance=["image_intel:gps"],
-                    attributes=h.raw_data,
+                    provenance=list(seed.provenance),
                 )
-            graph.add_edge(seed_id, gid, relation=h.relation, score=1.0, source_tool="image_intel")
+            graph.add_edge(seed_id, seed.id, relation="visual_clue", score=seed.confidence, source_tool="image_intel")
+
+        for wh in web_res.get("hits") or []:
+            wid = f"{wh.discovered_type.value}:{wh.discovered_value}"
+            if wid not in graph:
+                graph.add_node(
+                    wid,
+                    entity_type=wh.discovered_type.value,
+                    value=wh.discovered_value,
+                    confidence=0.95 if wh.metadata.get("avatar_match") else 0.75,
+                    depth=1,
+                    provenance=[f"{wh.source_tool}:{wh.relation}"],
+                    attributes=dict(wh.metadata),
+                )
+            graph.add_edge(
+                seed_id,
+                wid,
+                relation=wh.relation,
+                score=float(wh.metadata.get("visual_similarity") or 0.75),
+                source_tool=wh.source_tool,
+            )
+
+        # 3. Expand top discovered email/username seed via fast API collectors (GitHub, Play Store, Breach)
+        top_expand = [
+            s for s in (web_res.get("discovered_seeds") or [])
+            if s.entity_type in (EntityType.EMAIL, EntityType.USERNAME)
+        ]
+        if top_expand:
+            from osint_agent.collectors.profile_analyzer import analyze_profiles_batch
+            from osint_agent.collectors.tools import TOOL_REGISTRY
+
+            seed_ent = top_expand[0]
+            expand_tools = (
+                ["email_intel"]
+                if seed_ent.entity_type == EntityType.EMAIL
+                else ["github_code_intel", "playstore_intel", "breach_intel"]
+            )
+            for tname in expand_tools:
+                tool = TOOL_REGISTRY.get(tname)
+                if not tool:
+                    continue
+                try:
+                    thits = await tool.run(seed_ent, client)
+                    await analyze_profiles_batch(thits, client, max_profiles=10, concurrency=6)
+                    for th in thits:
+                        tid = f"{th.discovered_type.value}:{th.discovered_value}"
+                        if tid not in graph:
+                            graph.add_node(
+                                tid,
+                                entity_type=th.discovered_type.value,
+                                value=th.discovered_value,
+                                confidence=0.85,
+                                depth=2,
+                                provenance=[f"{th.source_tool}:{th.relation}"],
+                                attributes=dict(th.metadata),
+                            )
+                        graph.add_edge(seed_ent.id, tid, relation=th.relation, score=0.85, source_tool=th.source_tool)
+                except Exception:
+                    pass
 
     job.graph_data = format_graph_cytoscape(graph)
     job.status = "completed"

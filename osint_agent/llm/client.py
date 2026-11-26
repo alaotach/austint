@@ -390,8 +390,10 @@ class OpenRouterClient(BaseClient):
         valid_images = [
             u for u in (image_urls or [])[:3]
             if isinstance(u, str)
-            and u.startswith(("http://", "https://"))
-            and not u.lower().split("?")[0].endswith((".svg", ".ico"))
+            and (
+                (u.startswith(("http://", "https://")) and not u.lower().split("?")[0].endswith((".svg", ".ico")))
+                or u.startswith("data:image/")
+            )
         ]
 
         if valid_images:
