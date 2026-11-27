@@ -169,6 +169,39 @@ def evaluate_shortcut_baselines(
 
     clf_bio = LogisticRegression(random_state=seed, max_iter=500).fit(_bio_feat(train_rows), y_train)
 
+    # 4. Exact display-name match only
+    def _exact_dn_feat(rows: list[dict[str, Any]]) -> np.ndarray:
+        out = []
+        for r in rows:
+            da = str(r.get("display_name_a") or "").strip().lower()
+            db = str(r.get("display_name_b") or "").strip().lower()
+            out.append([1.0 if (da and db and da == db) else 0.0])
+        return np.asarray(out, dtype=np.float64)
+
+    clf_exact_dn = LogisticRegression(random_state=seed, max_iter=500).fit(_exact_dn_feat(train_rows), y_train)
+
+    # 5. Exact username match only
+    def _exact_un_feat(rows: list[dict[str, Any]]) -> np.ndarray:
+        out = []
+        for r in rows:
+            ua = str(r.get("username_a") or "").strip().lower()
+            ub = str(r.get("username_b") or "").strip().lower()
+            out.append([1.0 if (ua and ub and ua == ub) else 0.0])
+        return np.asarray(out, dtype=np.float64)
+
+    clf_exact_un = LogisticRegression(random_state=seed, max_iter=500).fit(_exact_un_feat(train_rows), y_train)
+
+    # 6. Has-bio only
+    def _has_bio_feat(rows: list[dict[str, Any]]) -> np.ndarray:
+        out = []
+        for r in rows:
+            ha = 1.0 if float(r.get("bio_len_a", 0)) > 0 else 0.0
+            hb = 1.0 if float(r.get("bio_len_b", 0)) > 0 else 0.0
+            out.append([ha, hb, 1.0 if (ha and hb) else 0.0])
+        return np.asarray(out, dtype=np.float64)
+
+    clf_has_bio = LogisticRegression(random_state=seed, max_iter=500).fit(_has_bio_feat(train_rows), y_train)
+
     results: dict[str, Any] = {"splits": {}, "dataset_bias_flags": []}
     for sp_name, rows in eval_splits.items():
         if not rows:
@@ -181,6 +214,9 @@ def evaluate_shortcut_baselines(
             "platform_pair_only": clf_plat.predict_proba(X_plat_sp)[:, 1],
             "username_sim_only": clf_uname.predict_proba(_uname_feat(rows))[:, 1],
             "bio_len_has_bio_only": clf_bio.predict_proba(_bio_feat(rows))[:, 1],
+            "exact_display_name_only": clf_exact_dn.predict_proba(_exact_dn_feat(rows))[:, 1],
+            "exact_username_only": clf_exact_un.predict_proba(_exact_un_feat(rows))[:, 1],
+            "has_bio_only": clf_has_bio.predict_proba(_has_bio_feat(rows))[:, 1],
         }
         sp_out: dict[str, Any] = {"pos_rate": round(pos_rate, 4), "models": {}}
         for mname, probs in preds.items():
@@ -248,6 +284,30 @@ def select_live_llm_provider() -> str | None:
 
 
 def _build_judge_prompt(pair: dict[str, Any], variant: str) -> tuple[str, str]:
+    if variant == "raw_no_sim":
+        system = (
+            "Decide if two public social profiles belong to the same person using ONLY raw profile fields "
+            "(no precomputed similarity scores). Return ONLY strict JSON: "
+            '{"match_probability": <float 0..1>, "rationale": "<short>"}.'
+        )
+        user = json.dumps(
+            {
+                "platform_a": pair.get("platform_a", ""),
+                "platform_b": pair.get("platform_b", ""),
+                "username_a": pair.get("username_a", ""),
+                "username_b": pair.get("username_b", ""),
+                "display_name_a": pair.get("display_name_a", ""),
+                "display_name_b": pair.get("display_name_b", ""),
+                "location_a": pair.get("location_a", ""),
+                "location_b": pair.get("location_b", ""),
+                "bio_a": pair.get("bio_a", ""),
+                "bio_b": pair.get("bio_b", ""),
+                "bio_len_a": pair.get("bio_len_a", 0),
+                "bio_len_b": pair.get("bio_len_b", 0),
+            },
+            ensure_ascii=True,
+        )
+        return system, user
     if variant == "field_by_field":
         system = (
             "You are an OSINT identity resolution judge. Compare each field carefully: "
@@ -277,6 +337,21 @@ def _build_judge_prompt(pair: dict[str, Any], variant: str) -> tuple[str, str]:
         ensure_ascii=True,
     )
     return system, user
+
+
+def recalibrate_isotonic_on_val(
+    y_val: np.ndarray,
+    probs_val: np.ndarray,
+    probs_list: list[np.ndarray],
+) -> list[np.ndarray]:
+    """Fit IsotonicRegression on val probabilities and transform target probability arrays."""
+    from sklearn.isotonic import IsotonicRegression
+
+    if len(y_val) < 4 or len(np.unique(y_val)) < 2:
+        return [np.asarray(p, dtype=np.float64) for p in probs_list]
+    iso = IsotonicRegression(y_min=0.0, y_max=1.0, out_of_bounds="clip")
+    iso.fit(np.asarray(probs_val, dtype=np.float64), np.asarray(y_val, dtype=int))
+    return [np.asarray(iso.transform(np.asarray(p, dtype=np.float64)), dtype=np.float64) for p in probs_list]
 
 
 def run_llm_judge_two_variants(

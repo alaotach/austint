@@ -508,10 +508,10 @@ def generate_report_assets(
                     f"- `{vname}` (val threshold=`{t_val}`): "
                     f"test PR-AUC={_fmt_ci((te.get('ci95') or {}).get('pr_auc') or te.get('pr_auc'))}, "
                     f"F1={_fmt_ci((te.get('ci95') or {}).get('f1') or te.get('f1'))}, "
-                    f"ECE={_fmt_ci((te.get('ci95') or {}).get('ece') or te.get('ece'))} | "
+                    f"ECE={_fmt_ci((te.get('ci95') or {}).get('ece') or te.get('ece'))} (isotonic: {te.get('ece_after_isotonic')}) | "
                     f"OOD PR-AUC={_fmt_ci((oo.get('ci95') or {}).get('pr_auc') or oo.get('pr_auc'))}, "
                     f"F1={_fmt_ci((oo.get('ci95') or {}).get('f1') or oo.get('f1'))}, "
-                    f"ECE={_fmt_ci((oo.get('ci95') or {}).get('ece') or oo.get('ece'))} | "
+                    f"ECE={_fmt_ci((oo.get('ci95') or {}).get('ece') or oo.get('ece'))} (isotonic: {oo.get('ece_after_isotonic')}) | "
                     f"tokens={vres.get('total_tokens')}, cost=${vres.get('cost_estimate_usd')}, latency={vres.get('latency_ms_per_pair')} ms/pair"
                 )
             else:

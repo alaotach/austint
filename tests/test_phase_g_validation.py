@@ -97,6 +97,9 @@ def test_shortcut_baselines_and_negative_type_breakdown():
         "platform_pair_only",
         "username_sim_only",
         "bio_len_has_bio_only",
+        "exact_display_name_only",
+        "exact_username_only",
+        "has_bio_only",
     }
 
     nb = evaluate_by_negative_type(rows, {"m1": np.array([0.9, 0.2, 0.95, 0.1])})
@@ -160,3 +163,20 @@ def test_g4f_client_eryzalabs_fallback(monkeypatch):
         out = cli.complete_json("sys", "usr")
         assert out["match_probability"] == 0.88
         assert out["_token_usage"] == 42
+
+
+
+def test_raw_no_sim_prompt_and_isotonic_recalibration():
+    import json
+    from osint_agent.ml.validation import _build_judge_prompt, recalibrate_isotonic_on_val
+
+    rows = _sample_rows()
+    sys_p, usr_p = _build_judge_prompt(rows[0], "raw_no_sim")
+    payload = json.loads(usr_p)
+    assert "bio_emb_sim" not in payload and "avatar_sim" not in payload
+    assert "bio_a" in payload and "bio_len_a" in payload
+
+    y_val = np.array([1, 0, 1, 0])
+    p_val = np.array([0.3, 0.1, 0.4, 0.05])
+    [p_cal] = recalibrate_isotonic_on_val(y_val, p_val, [np.array([0.35, 0.08])])
+    assert p_cal[0] >= p_cal[1]
