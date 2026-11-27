@@ -2409,20 +2409,29 @@ async def _search_brave(query: str, api_key: str, client: httpx.AsyncClient) -> 
     ]
 
 
-async def _search_tavily(query: str, api_key: str, client: httpx.AsyncClient) -> list[dict[str, str]]:
+async def _search_tavily(query: str, api_key: str, client: httpx.AsyncClient) -> list[dict[str, Any]]:
     resp = await client.post(
         "https://api.tavily.com/search",
-        json={"api_key": api_key, "query": query, "max_results": 5},
+        json={"api_key": api_key, "query": query, "max_results": 5, "include_images": True},
         timeout=10.0,
     )
     if resp.status_code != 200:
         return []
-    results = resp.json().get("results") or []
-    return [
-        {"url": str(r.get("url") or ""), "title": str(r.get("title") or ""), "snippet": str(r.get("content") or "")}
-        for r in results
-        if isinstance(r, dict)
-    ]
+    body = resp.json()
+    results = body.get("results") or []
+    imgs = [str(u) for u in (body.get("images") or []) if isinstance(u, str) and u.startswith("http")][:8]
+    out: list[dict[str, Any]] = []
+    for idx, r in enumerate(results):
+        if isinstance(r, dict):
+            item: dict[str, Any] = {
+                "url": str(r.get("url") or ""),
+                "title": str(r.get("title") or ""),
+                "snippet": str(r.get("content") or ""),
+            }
+            if idx == 0 and imgs:
+                item["images"] = imgs
+            out.append(item)
+    return out
 
 
 async def _search_google_pse(query: str, api_key: str, cx: str, client: httpx.AsyncClient) -> list[dict[str, str]]:
@@ -2577,6 +2586,7 @@ async def collect_exa_search(entity: Entity, client: httpx.AsyncClient) -> list[
                     "snippet": snippet,
                     "author": str(item.get("author") or ""),
                     "published_date": str(item.get("published_date") or ""),
+                    "images": item.get("images") or [],
                 },
             )
 
@@ -2609,6 +2619,7 @@ async def collect_exa_search(entity: Entity, client: httpx.AsyncClient) -> list[
                     "title": title,
                     "bio": (snippet[:1500] if pdf_text else snippet[:400]) if snippet else title,
                     **({"document_text": pdf_text} if pdf_text else {}),
+                    **({"images": item["images"]} if item.get("images") else {}),
                     **({"name": author} if author else {}),
                     **({"published_date": pub_date} if pub_date else {}),
                 },

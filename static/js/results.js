@@ -93,8 +93,19 @@
     };
 
     if (d.type === "profile") {
+      const ef = attrs.extra_fields || {};
       add("name", attrs.name || attrs.display_name);
+      add("role", attrs.job_title || attrs.headline || ef.headline);
+      add("orgs", attrs.organizations || attrs.orgs || attrs.company);
       add("location", attrs.location || attrs.country);
+      add("dob", attrs.dob || ef.dob);
+      add("research", attrs.current_research_area || ef.current_research_area);
+      add("education", attrs.education || ef.education);
+      add("experience", attrs.experience || ef.experience);
+      add("guide", attrs.guide_name || ef.guide_name);
+      add("skills", attrs.skills);
+      add("emails", attrs.contact_emails || attrs.email);
+      add("projects", attrs.projects_or_stories);
       add("joined", attrs.joined || attrs.created_at);
       add("active", attrs.activity_dates || attrs.updated_at);
       add("followers", attrs.followers);
@@ -104,7 +115,11 @@
       }
       if (attrs.total_views != null) add("views", attrs.total_views);
       add("languages", attrs.languages);
-      add("orgs", attrs.orgs);
+      const shownExtra = new Set(["dob", "guide_name", "current_research_area", "education", "experience", "headline", "document_type"]);
+      Object.entries(ef).forEach(([k, v]) => {
+        if (!shownExtra.has(k) && k !== "contacts_listed") add(k.replace(/_/g, " "), v);
+      });
+      add("summary", attrs.llm_summary);
     } else if (d.type === "domain") {
       add("registrar", attrs.registrar);
       add("ip", attrs.ip);
@@ -246,6 +261,12 @@
     const locations = new Set();
     const orgs = new Set();
     const websites = new Set();
+    const roles = new Set();
+    const dobs = new Set();
+    const education = new Set();
+    const skills = new Set();
+    const projects = new Set();
+    const summaries = new Set();
     const photos = new Set();
 
     const photoItems = [];
@@ -257,9 +278,15 @@
         photoItems.push({ url: u, source: srcLabel || "", pageUrl: linkUrl || u });
       }
     };
-    const addStr = (set, v) => {
+    const addStr = (set, v, maxLen = 260) => {
       const s = String(v || "").trim();
-      if (s && s.length < 220) set.add(s);
+      if (s && s.length < maxLen) set.add(s);
+    };
+    const isLikelyDomain = (v) => {
+      const s = String(v || "").trim().toLowerCase();
+      if (!s || /^(s\.no|m\.tech|b\.tech|b\.e|r\.k\..*)$/.test(s)) return false;
+      if (/^[a-z]\.[a-z]\./.test(s)) return false;
+      return true;
     };
 
     allNodes.forEach((n) => {
@@ -270,14 +297,24 @@
       const pageUrl = a.url || (String(d.label || "").startsWith("http") ? d.label : "");
       if (d.type === "email") addStr(emails, d.label);
       if (d.type === "org") addStr(orgs, d.label);
-      if (d.type === "domain") addStr(websites, d.label);
-      [a.name, a.display_name, ef.legal_name].forEach((x) => addStr(names, x));
+      if (d.type === "domain" && isLikelyDomain(d.label)) addStr(websites, d.label);
+      [a.name, a.display_name, ef.legal_name].forEach((x) => {
+        if (x && String(x).trim().toUpperCase() !== "WATCH") addStr(names, x);
+      });
       [a.email, a.developer_email, a.support_email, ef.developer_email, ef.support_email].forEach((x) => addStr(emails, x));
       (a.contact_emails || []).forEach((x) => addStr(emails, x));
       (a.phone_numbers || []).forEach((x) => addStr(phones, x));
       [a.location, a.office_address, ef.office_address, a.country].forEach((x) => addStr(locations, x));
       [a.company, a.developer_name, ef.developer_name].forEach((x) => addStr(orgs, x));
       (a.orgs || []).forEach((x) => addStr(orgs, x));
+      (a.organizations || []).forEach((x) => addStr(orgs, x));
+      [a.job_title, a.headline, ef.headline].forEach((x) => addStr(roles, x));
+      [a.dob, ef.dob].forEach((x) => addStr(dobs, x));
+      [a.education, ef.education, a.guide_name ? `Guide: ${a.guide_name}` : "", ef.guide_name ? `Guide: ${ef.guide_name}` : ""].forEach((x) => addStr(education, x, 350));
+      (a.skills || []).forEach((x) => addStr(skills, x));
+      [a.current_research_area, ef.current_research_area].forEach((x) => addStr(skills, x, 300));
+      (a.projects_or_stories || []).forEach((x) => addStr(projects, x, 300));
+      if (a.llm_summary) addStr(summaries, a.llm_summary, 400);
       if (typeof a.website === "string" && a.website.startsWith("http")) addStr(websites, a.website);
       [a.avatar_url, a.avatar].forEach((u) => pushPhoto(u, srcLabel, pageUrl));
       (a.images || []).forEach((u) => pushPhoto(u, srcLabel, pageUrl));
@@ -327,11 +364,17 @@
           </div>
           <div style="flex:1; min-width:280px; display:grid; grid-template-columns:repeat(auto-fit, minmax(190px, 1fr)); gap:0 var(--space-4);">
             ${row("Names & Aliases", names, false)}
+            ${row("Roles & Titles", roles, false)}
             ${row("Emails", emails, false)}
             ${row("Phone Numbers", phones, false)}
+            ${row("Date of Birth", dobs, false)}
             ${row("Locations & Addresses", locations, false)}
             ${row("Organizations", orgs, false)}
+            ${row("Education & Guide", education, false)}
+            ${row("Skills & Research", skills, false)}
+            ${row("Projects & Publications", projects, false)}
             ${row("Domains & Websites", websites, true)}
+            ${row("Profile Summary", summaries, false)}
           </div>
         </div>
       </section>
