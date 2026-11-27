@@ -501,12 +501,41 @@ def generate_report_assets(
         )
         for vname, vres in (lj.get("variants") or {}).items():
             if vres.get("status") == "ok":
+                t_val = vres.get("val_tuned_threshold", 0.5)
+                te = vres.get("test") or {}
+                oo = vres.get("ood_platform_test") or {}
                 lines.append(
-                    f"- `{vname}`: PR-AUC={vres.get('pr_auc'):.4f}, F1={vres.get('f1'):.4f}, ECE={vres.get('ece'):.4f}, "
+                    f"- `{vname}` (val threshold=`{t_val}`): "
+                    f"test PR-AUC={_fmt_ci((te.get('ci95') or {}).get('pr_auc') or te.get('pr_auc'))}, "
+                    f"F1={_fmt_ci((te.get('ci95') or {}).get('f1') or te.get('f1'))}, "
+                    f"ECE={_fmt_ci((te.get('ci95') or {}).get('ece') or te.get('ece'))} | "
+                    f"OOD PR-AUC={_fmt_ci((oo.get('ci95') or {}).get('pr_auc') or oo.get('pr_auc'))}, "
+                    f"F1={_fmt_ci((oo.get('ci95') or {}).get('f1') or oo.get('f1'))}, "
+                    f"ECE={_fmt_ci((oo.get('ci95') or {}).get('ece') or oo.get('ece'))} | "
                     f"tokens={vres.get('total_tokens')}, cost=${vres.get('cost_estimate_usd')}, latency={vres.get('latency_ms_per_pair')} ms/pair"
                 )
             else:
                 lines.append(f"- `{vname}`: `{vres.get('status')}` — {vres.get('reason', '')}")
+        p_gnn_llm = lj.get("paired_bootstrap_gnn_vs_llm") or {}
+        if p_gnn_llm:
+            lines.extend(
+                [
+                    "",
+                    "| Split | Comparison (GNN - LLM) | ΔPR-AUC (95% CI) | PR-AUC Sig. | ΔF1 (95% CI) | F1 Sig. |",
+                    "|---|---|---:|---|---:|---|",
+                ]
+            )
+            for sp_n in ("test", "ood_platform_test"):
+                for cname, cdata in (p_gnn_llm.get(sp_n) or {}).items():
+                    pr_d = cdata.get("pr_auc_diff") or {}
+                    f1_d = cdata.get("f1_diff") or {}
+                    lines.append(
+                        f"| `{sp_n}` | `{cname}` | "
+                        f"{float(pr_d.get('mean_diff', 0.0)):+.4f} [{float(pr_d.get('ci_low', 0.0)):+.4f}, {float(pr_d.get('ci_high', 0.0)):+.4f}] | "
+                        f"{pr_d.get('status', 'not significant')} | "
+                        f"{float(f1_d.get('mean_diff', 0.0)):+.4f} [{float(f1_d.get('ci_low', 0.0)):+.4f}, {float(f1_d.get('ci_high', 0.0)):+.4f}] | "
+                        f"{f1_d.get('status', 'not significant')} |"
+                    )
 
     lines.extend(
         [

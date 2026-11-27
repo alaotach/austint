@@ -128,8 +128,15 @@ Every number below is generated directly from JSON artifacts in `data/osint_link
 
 ### 6.6 Zero-Shot LLM Judge (2 Prompt Variants)
 - Status: `ok` (provider: `g4f/GithubCopilot/gpt-4.1`)
-- `minimal`: PR-AUC=0.9617, F1=0.8502, ECE=0.1085, tokens=65191, cost=$0.0, latency=10468.1384 ms/pair
-- `field_by_field`: PR-AUC=0.9685, F1=0.8216, ECE=0.1144, tokens=77269, cost=$0.0, latency=6476.8015 ms/pair
+- `minimal` (val threshold=`0.18`): test PR-AUC=0.9249 [0.8822, 0.9644], F1=0.8344 [0.7651, 0.9000], ECE=0.1135 [0.0885, 0.1470] | OOD PR-AUC=0.9994 [0.9957, 1.0000], F1=0.9744 [0.9320, 1.0000], ECE=0.1258 [0.0985, 0.1645] | tokens=65191, cost=$0.0, latency=9738.6852 ms/pair
+- `field_by_field` (val threshold=`0.17`): test PR-AUC=0.9380 [0.8973, 0.9718], F1=0.8642 [0.7974, 0.9241], ECE=0.1292 [0.1073, 0.1646] | OOD PR-AUC=0.9997 [0.9983, 1.0000], F1=0.9915 [0.9703, 1.0000], ECE=0.1349 [0.0981, 0.1819] | tokens=77269, cost=$0.0, latency=6486.8105 ms/pair
+
+| Split | Comparison (GNN - LLM) | ΔPR-AUC (95% CI) | PR-AUC Sig. | ΔF1 (95% CI) | F1 Sig. |
+|---|---|---:|---|---:|---|
+| `test` | `gnn_vs_llm_minimal` | +0.0117 [-0.0353, +0.0616] | not significant | +0.0048 [-0.0847, +0.0917] | not significant |
+| `test` | `gnn_vs_llm_field_by_field` | -0.0012 [-0.0428, +0.0437] | not significant | -0.0259 [-0.1039, +0.0517] | not significant |
+| `ood_platform_test` | `gnn_vs_llm_minimal` | -0.1353 [-0.1920, -0.0762] | significant | -0.2085 [-0.2778, -0.1281] | significant |
+| `ood_platform_test` | `gnn_vs_llm_field_by_field` | -0.1359 [-0.1920, -0.0780] | significant | -0.2255 [-0.2844, -0.1636] | significant |
 
 ## 7. Generated Figures & Tables
 - PR Operating Points: `report/figures/pr_curves.png`
