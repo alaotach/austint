@@ -412,8 +412,12 @@ class OpenRouterClient(BaseClient):
         # Ensure at least 8192 tokens so reasoning doesn't starve the JSON output.
         effective_max_tokens = max(max_tokens, 8192)
 
+        chosen_model = self.model
+        if valid_images and "eryzalabs" in (self.base_url or "").lower():
+            chosen_model = os.getenv("ERYZALABS_VISION_MODEL", "nvidia/nemotron-3.5-super-vl-120b-a12b")
+
         payload: dict[str, Any] = {
-            "model": self.model,
+            "model": chosen_model,
             "max_tokens": effective_max_tokens,
             "messages": [
                 {"role": "system", "content": system},
@@ -459,6 +463,7 @@ class OpenRouterClient(BaseClient):
                             attempt + 1, _MAX_ATTEMPTS, resp.text[:200],
                         )
                         payload["messages"][1]["content"] = user
+                        payload["model"] = self.model
                         last_exc = httpx.HTTPStatusError(
                             f"400 Bad Request (multimodal fallback): {resp.text[:150]}",
                             request=resp.request,
