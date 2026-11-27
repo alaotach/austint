@@ -14,7 +14,7 @@ from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, UploadF
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, Field
 
 from osint_agent.core.agent import OSINTAgent
 from osint_agent.llm.client import get_llm_client
@@ -98,8 +98,16 @@ class ParseSeedsRequest(BaseModel):
 
 
 class InvestigateRequest(BaseModel):
-    kind: EntityType | None = Field(None, description="Target entity kind (org, domain, place, etc.)")
-    value: str | None = Field(None, description="Target entity value")
+    kind: EntityType | None = Field(
+        None,
+        validation_alias=AliasChoices("kind", "target_kind"),
+        description="Target entity kind (org, domain, place, etc.)",
+    )
+    value: str | None = Field(
+        None,
+        validation_alias=AliasChoices("value", "target_value"),
+        description="Target entity value",
+    )
     free_text: str | None = Field(None, description="Optional free-text target prompt to parse into seeds")
     consent_confirmed: bool = Field(False, description="MUST be True to authorize public OSINT search")
     max_depth: int = Field(2, ge=1, le=5, description="Maximum traversal depth along entity chain")
