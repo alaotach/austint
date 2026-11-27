@@ -20,11 +20,11 @@ Every number below is generated directly from JSON artifacts in `data/osint_link
 | Model | Split | Precision (95% CI) | Recall (95% CI) | F1 (95% CI) | PR-AUC (95% CI) | ECE (95% CI) | Latency (ms/pair) |
 |---|---|---:|---:|---:|---:|---:|---:|
 | `rule_baseline` | `test` | 0.8431 [0.7379, 0.9238] | 0.5181 [0.4144, 0.6095] | 0.6418 [0.5433, 0.7211] | 0.7414 [0.6530, 0.8151] | 0.1369 [0.0926, 0.1879] | 0.0021 |
-| `logistic_regression` | `test` | 0.8955 [0.8068, 0.9600] | 0.7229 [0.6311, 0.8158] | 0.8000 [0.7211, 0.8722] | 0.8685 [0.8080, 0.9235] | 0.1323 [0.1001, 0.1800] | 0.0007 |
+| `logistic_regression` | `test` | 0.8955 [0.8068, 0.9600] | 0.7229 [0.6311, 0.8158] | 0.8000 [0.7211, 0.8722] | 0.8685 [0.8080, 0.9235] | 0.1323 [0.1001, 0.1800] | 0.0008 |
 | `hist_gradient_boosting` | `test` | 0.9531 [0.8991, 1.0000] | 0.7349 [0.6410, 0.8256] | 0.8299 [0.7602, 0.8919] | 0.9174 [0.8705, 0.9558] | 0.0549 [0.0369, 0.1051] | 0.0048 |
-| `rule_baseline` | `ood_platform_test` | 0.8333 [0.5833, 1.0000] | 0.3125 [0.1429, 0.4678] | 0.4545 [0.2284, 0.6087] | 0.6475 [0.4986, 0.7752] | 0.1069 [0.0680, 0.1893] | 0.0016 |
-| `logistic_regression` | `ood_platform_test` | 0.9000 [0.7647, 1.0000] | 0.5625 [0.3968, 0.7188] | 0.6923 [0.5411, 0.8142] | 0.7372 [0.5959, 0.8606] | 0.1191 [0.0864, 0.1917] | 0.0013 |
-| `hist_gradient_boosting` | `ood_platform_test` | 0.9474 [0.8440, 1.0000] | 0.5625 [0.3968, 0.7188] | 0.7059 [0.5555, 0.8264] | 0.7303 [0.6066, 0.8636] | 0.0792 [0.0335, 0.1452] | 0.0091 |
+| `rule_baseline` | `ood_platform_test` | 0.8182 [0.5912, 1.0000] | 0.6429 [0.4000, 0.8711] | 0.7200 [0.5000, 0.8966] | 0.8414 [0.6583, 0.9818] | 0.1828 [0.1402, 0.2354] | 0.0014 |
+| `logistic_regression` | `ood_platform_test` | 0.8571 [0.6667, 1.0000] | 0.8571 [0.6429, 1.0000] | 0.8571 [0.6776, 0.9655] | 0.8872 [0.7173, 1.0000] | 0.1742 [0.1366, 0.2102] | 0.0020 |
+| `hist_gradient_boosting` | `ood_platform_test` | 0.9231 [0.7500, 1.0000] | 0.8571 [0.6429, 1.0000] | 0.8889 [0.7387, 1.0000] | 0.8605 [0.6803, 1.0000] | 0.0442 [0.0213, 0.0764] | 0.0115 |
 
 - Note: `zero_shot_llm_judge` is omitted because OpenRouter returned HTTP 429 rate-limited (`total_tokens=0`); 0.5 fallback values are not reported.
 
@@ -52,21 +52,23 @@ Every number below is generated directly from JSON artifacts in `data/osint_link
 |---|---|---:|---:|---:|---:|---:|
 | Old GNN (pre-audit) | `test` | 0.9250 | 0.8391 | 0.8022 | 0.8795 | 0.0742 |
 | Old GNN (pre-audit) | `ood_platform_test` | 0.8481 | 0.8033 | 0.7656 | 0.8448 | 0.1462 |
-| New GNN (pair-links masked, split-isolated) | `test` | 0.9349 | 0.8315 | 0.7789 | 0.8916 | 0.0842 |
-| New GNN (pair-links masked, split-isolated) | `ood_platform_test` | 0.8384 | 0.6747 | 0.5490 | 0.8750 | 0.1966 |
+| New GNN (pair-links masked, split-isolated) | `test` | 0.9340 | 0.8427 | 0.7895 | 0.9036 | 0.0707 |
+| New GNN (pair-links masked, split-isolated) | `ood_platform_test` | 0.9018 | 0.4333 | 0.2826 | 0.9286 | 0.3250 |
 | New GNN (candidate-only edges, no anchor broadcast) | `test` | 0.8532 | 0.7123 | 0.8254 | 0.6265 | 0.0665 |
-| New GNN (candidate-only edges, no anchor broadcast) | `ood_platform_test` | 0.6809 | 0.5902 | 0.6207 | 0.5625 | 0.0945 |
+| New GNN (candidate-only edges, no anchor broadcast) | `ood_platform_test` | 0.7897 | 0.6316 | 0.5000 | 0.8571 | 0.1975 |
 
 ### 6.2 Person-Clustered Paired Bootstrap (1,000 iterations, seed `42`)
 
 | Split | Comparison | ΔPR-AUC (95% CI) | PR-AUC Sig. | ΔF1 (95% CI) | F1 Sig. |
 |---|---|---:|---|---:|---|
-| `test` | GNN vs HistGBM | +0.0198 [-0.0217, +0.0646] | not significant | +0.0054 [-0.0747, +0.0881] | not significant |
+| `test` | GNN vs HistGBM | +0.0188 [-0.0226, +0.0636] | not significant | +0.0161 [-0.0609, +0.0912] | not significant |
 | `test` | Neural vs HistGBM | -0.0948 [-0.1541, -0.0429] | significant | -0.1373 [-0.2089, -0.0699] | significant |
-| `test` | GNN vs Neural | +0.1146 [+0.0740, +0.1594] | significant | +0.1427 [+0.0814, +0.2107] | significant |
-| `ood_platform_test` | GNN vs HistGBM | +0.1097 [+0.0007, +0.2158] | significant | -0.0255 [-0.1427, +0.1025] | not significant |
-| `ood_platform_test` | Neural vs HistGBM | -0.0098 [-0.1223, +0.1015] | not significant | -0.0345 [-0.1741, +0.1213] | not significant |
-| `ood_platform_test` | GNN vs Neural | +0.1194 [+0.0658, +0.1747] | significant | +0.0090 [-0.0619, +0.0830] | not significant |
+| `test` | GNN vs Neural | +0.1136 [+0.0726, +0.1581] | significant | +0.1534 [+0.0915, +0.2233] | significant |
+| `test` | gnn_vs_username_sim_only | +0.1746 [+0.1059, +0.2477] | significant | +0.0949 [+0.0145, +0.1798] | significant |
+| `test` | gnn_vs_histgbm | +0.0188 [-0.0226, +0.0636] | not significant | +0.0161 [-0.0609, +0.0912] | not significant |
+| `ood_platform_test` | GNN vs HistGBM | +0.0362 [-0.0434, +0.1161] | not significant | -0.4499 [-0.6300, -0.2701] | significant |
+| `ood_platform_test` | Neural vs HistGBM | -0.0051 [-0.0985, +0.0695] | not significant | -0.2519 [-0.4024, -0.1221] | significant |
+| `ood_platform_test` | GNN vs Neural | +0.0414 [+0.0064, +0.0897] | significant | -0.1980 [-0.3433, -0.0629] | significant |
 
 ### 6.3 Shortcut Baselines (Dataset Bias Probe)
 
@@ -78,12 +80,12 @@ Every number below is generated directly from JSON artifacts in `data/osint_link
 | `exact_display_name_only` | `test` | 0.3673 | 0.5121 | 0.3725 | 1.0000 | 0.2289 |
 | `exact_username_only` | `test` | 0.3673 | 0.5426 | 0.4340 | 1.0000 | 0.2771 |
 | `has_bio_only` | `test` | 0.3673 | 0.3677 | 0.0000 | 0.0000 | 0.0000 |
-| `platform_pair_only` | `ood_platform_test` | 0.2857 | 0.3661 | 0.4444 | 0.3673 | 0.5625 |
-| `username_sim_only` | `ood_platform_test` | 0.2857 | 0.6137 | 0.5833 | 0.8750 | 0.4375 |
-| `bio_len_has_bio_only` | `ood_platform_test` | 0.2857 | 0.3336 | 0.0000 | 0.0000 | 0.0000 |
-| `exact_display_name_only` | `ood_platform_test` | 0.2857 | 0.8438 | 0.8772 | 1.0000 | 0.7812 |
-| `exact_username_only` | `ood_platform_test` | 0.2857 | 0.5312 | 0.5116 | 1.0000 | 0.3438 |
-| `has_bio_only` | `ood_platform_test` | 0.2857 | 0.2530 | 0.0000 | 0.0000 | 0.0000 |
+| `platform_pair_only` | `ood_platform_test` | 0.1489 | 0.1507 | 0.0000 | 0.0000 | 0.0000 |
+| `username_sim_only` | `ood_platform_test` | 0.1489 | 0.8323 | 0.8148 | 0.8462 | 0.7857 |
+| `bio_len_has_bio_only` | `ood_platform_test` | 0.1489 | 0.1489 | 0.0000 | 0.0000 | 0.0000 |
+| `exact_display_name_only` | `ood_platform_test` | 0.1489 | 0.5745 | 0.6667 | 1.0000 | 0.5000 |
+| `exact_username_only` | `ood_platform_test` | 0.1489 | 0.6960 | 0.7826 | 1.0000 | 0.6429 |
+| `has_bio_only` | `ood_platform_test` | 0.1489 | 0.1220 | 0.0000 | 0.0000 | 0.0000 |
 - **Dataset Bias Flag**: platform_pair_only achieves PR-AUC=0.6156 vs random baseline=0.3673 on test
 
 ### 6.4 Per-Negative-Type Breakdown (`test` & `ood_platform_test`)
@@ -94,58 +96,72 @@ Every number below is generated directly from JSON artifacts in `data/osint_link
 | `test` | `diff_person_fallback` | no | `logistic_regression` | 0.9573 | 0.8333 | 0.9836 | 0.7229 |
 | `test` | `diff_person_fallback` | no | `hist_gradient_boosting` | 0.9649 | 0.8356 | 0.9683 | 0.7349 |
 | `test` | `diff_person_fallback` | no | `phase_c_neural` | 0.9366 | 0.7808 | 0.9048 | 0.6867 |
-| `test` | `diff_person_fallback` | no | `phase_c_plus_gnn` | 0.9853 | 0.9136 | 0.9367 | 0.8916 |
+| `test` | `diff_person_fallback` | no | `phase_c_plus_gnn` | 0.9867 | 0.9202 | 0.9375 | 0.9036 |
+| `test` | `diff_person_fallback` | no | `llm_field_by_field` | 0.9834 | 0.9091 | 0.9859 | 0.8434 |
+| `test` | `diff_person_fallback` | no | `llm_raw_no_sim` | 0.9781 | 0.8874 | 0.9853 | 0.8072 |
 | `test` | `similar_username_diff_person` | **YES (hard)** | `rule_baseline` | 0.8401 | 0.6466 | 0.8600 | 0.5181 |
 | `test` | `similar_username_diff_person` | **YES (hard)** | `logistic_regression` | 0.9163 | 0.8219 | 0.9524 | 0.7229 |
 | `test` | `similar_username_diff_person` | **YES (hard)** | `hist_gradient_boosting` | 0.9675 | 0.8472 | 1.0000 | 0.7349 |
 | `test` | `similar_username_diff_person` | **YES (hard)** | `phase_c_neural` | 0.9017 | 0.7600 | 0.8507 | 0.6867 |
-| `test` | `similar_username_diff_person` | **YES (hard)** | `phase_c_plus_gnn` | 0.9679 | 0.8916 | 0.8916 | 0.8916 |
+| `test` | `similar_username_diff_person` | **YES (hard)** | `phase_c_plus_gnn` | 0.9671 | 0.9036 | 0.9036 | 0.9036 |
+| `test` | `similar_username_diff_person` | **YES (hard)** | `llm_field_by_field` | 0.9627 | 0.8861 | 0.9333 | 0.8434 |
+| `test` | `similar_username_diff_person` | **YES (hard)** | `llm_raw_no_sim` | 0.9653 | 0.8758 | 0.9571 | 0.8072 |
 | `test` | `same_name_diff_org_city` | **YES (hard)** | `rule_baseline` | 0.8735 | 0.6615 | 0.9149 | 0.5181 |
 | `test` | `same_name_diff_org_city` | **YES (hard)** | `logistic_regression` | 0.9380 | 0.8219 | 0.9524 | 0.7229 |
 | `test` | `same_name_diff_org_city` | **YES (hard)** | `hist_gradient_boosting` | 0.9575 | 0.8414 | 0.9839 | 0.7349 |
 | `test` | `same_name_diff_org_city` | **YES (hard)** | `phase_c_neural` | 0.9412 | 0.7917 | 0.9344 | 0.6867 |
-| `test` | `same_name_diff_org_city` | **YES (hard)** | `phase_c_plus_gnn` | 0.9843 | 0.9193 | 0.9487 | 0.8916 |
+| `test` | `same_name_diff_org_city` | **YES (hard)** | `phase_c_plus_gnn` | 0.9827 | 0.9259 | 0.9494 | 0.9036 |
+| `test` | `same_name_diff_org_city` | **YES (hard)** | `llm_field_by_field` | 0.9761 | 0.9032 | 0.9722 | 0.8434 |
+| `test` | `same_name_diff_org_city` | **YES (hard)** | `llm_raw_no_sim` | 0.9740 | 0.8933 | 1.0000 | 0.8072 |
 | `test` | `same_display_name_diff_links` | **YES (hard)** | `rule_baseline` | 0.9639 | 0.6772 | 0.9773 | 0.5181 |
 | `test` | `same_display_name_diff_links` | **YES (hard)** | `logistic_regression` | 0.9819 | 0.8392 | 1.0000 | 0.7229 |
 | `test` | `same_display_name_diff_links` | **YES (hard)** | `hist_gradient_boosting` | 0.9884 | 0.8472 | 1.0000 | 0.7349 |
 | `test` | `same_display_name_diff_links` | **YES (hard)** | `phase_c_neural` | 0.9656 | 0.7862 | 0.9194 | 0.6867 |
-| `test` | `same_display_name_diff_links` | **YES (hard)** | `phase_c_plus_gnn` | 0.9855 | 0.9250 | 0.9610 | 0.8916 |
-| `ood_platform_test` | `diff_person_fallback` | no | `rule_baseline` | 0.8190 | 0.5455 | 1.0000 | 0.3750 |
-| `ood_platform_test` | `diff_person_fallback` | no | `logistic_regression` | 0.8679 | 0.7200 | 1.0000 | 0.5625 |
-| `ood_platform_test` | `diff_person_fallback` | no | `hist_gradient_boosting` | 0.8146 | 0.7200 | 1.0000 | 0.5625 |
-| `ood_platform_test` | `diff_person_fallback` | no | `phase_c_neural` | 0.8520 | 0.7797 | 0.8519 | 0.7188 |
-| `ood_platform_test` | `diff_person_fallback` | no | `phase_c_plus_gnn` | 0.9228 | 0.8000 | 0.7368 | 0.8750 |
-| `ood_platform_test` | `similar_username_diff_person` | **YES (hard)** | `rule_baseline` | 0.7785 | 0.5333 | 0.9231 | 0.3750 |
-| `ood_platform_test` | `similar_username_diff_person` | **YES (hard)** | `logistic_regression` | 0.8324 | 0.7059 | 0.9474 | 0.5625 |
-| `ood_platform_test` | `similar_username_diff_person` | **YES (hard)** | `hist_gradient_boosting` | 0.8665 | 0.7200 | 1.0000 | 0.5625 |
-| `ood_platform_test` | `similar_username_diff_person` | **YES (hard)** | `phase_c_neural` | 0.8378 | 0.7541 | 0.7931 | 0.7188 |
-| `ood_platform_test` | `similar_username_diff_person` | **YES (hard)** | `phase_c_plus_gnn` | 0.9134 | 0.8116 | 0.7568 | 0.8750 |
-| `ood_platform_test` | `same_name_diff_org_city` | **YES (hard)** | `rule_baseline` | 0.8008 | 0.5333 | 0.9231 | 0.3750 |
-| `ood_platform_test` | `same_name_diff_org_city` | **YES (hard)** | `logistic_regression` | 0.8587 | 0.7059 | 0.9474 | 0.5625 |
-| `ood_platform_test` | `same_name_diff_org_city` | **YES (hard)** | `hist_gradient_boosting` | 0.8467 | 0.7059 | 0.9474 | 0.5625 |
-| `ood_platform_test` | `same_name_diff_org_city` | **YES (hard)** | `phase_c_neural` | 0.8800 | 0.7797 | 0.8519 | 0.7188 |
-| `ood_platform_test` | `same_name_diff_org_city` | **YES (hard)** | `phase_c_plus_gnn` | 0.9480 | 0.8750 | 0.8750 | 0.8750 |
+| `test` | `same_display_name_diff_links` | **YES (hard)** | `phase_c_plus_gnn` | 0.9848 | 0.9317 | 0.9615 | 0.9036 |
+| `test` | `same_display_name_diff_links` | **YES (hard)** | `llm_field_by_field` | 0.9911 | 0.9091 | 0.9859 | 0.8434 |
+| `test` | `same_display_name_diff_links` | **YES (hard)** | `llm_raw_no_sim` | 0.9899 | 0.8933 | 1.0000 | 0.8072 |
+| `ood_platform_test` | `diff_person_fallback` | no | `rule_baseline` | 0.9236 | 0.8333 | 1.0000 | 0.7143 |
+| `ood_platform_test` | `diff_person_fallback` | no | `logistic_regression` | 0.9344 | 0.9231 | 1.0000 | 0.8571 |
+| `ood_platform_test` | `diff_person_fallback` | no | `hist_gradient_boosting` | 0.8964 | 0.9231 | 1.0000 | 0.8571 |
+| `ood_platform_test` | `diff_person_fallback` | no | `phase_c_neural` | 0.9209 | 0.8387 | 0.7647 | 0.9286 |
+| `ood_platform_test` | `diff_person_fallback` | no | `phase_c_plus_gnn` | 0.9458 | 0.6190 | 0.4643 | 0.9286 |
+| `ood_platform_test` | `diff_person_fallback` | no | `llm_field_by_field` | 1.0000 | 1.0000 | 1.0000 | 1.0000 |
+| `ood_platform_test` | `diff_person_fallback` | no | `llm_raw_no_sim` | 0.9874 | 0.9231 | 1.0000 | 0.8571 |
+| `ood_platform_test` | `similar_username_diff_person` | **YES (hard)** | `rule_baseline` | 0.8904 | 0.8000 | 0.9091 | 0.7143 |
+| `ood_platform_test` | `similar_username_diff_person` | **YES (hard)** | `logistic_regression` | 0.9169 | 0.8889 | 0.9231 | 0.8571 |
+| `ood_platform_test` | `similar_username_diff_person` | **YES (hard)** | `hist_gradient_boosting` | 0.9127 | 0.9231 | 1.0000 | 0.8571 |
+| `ood_platform_test` | `similar_username_diff_person` | **YES (hard)** | `phase_c_neural` | 0.9095 | 0.7879 | 0.6842 | 0.9286 |
+| `ood_platform_test` | `similar_username_diff_person` | **YES (hard)** | `phase_c_plus_gnn` | 0.9394 | 0.6842 | 0.5417 | 0.9286 |
+| `ood_platform_test` | `similar_username_diff_person` | **YES (hard)** | `llm_field_by_field` | 0.9952 | 0.9655 | 0.9333 | 1.0000 |
+| `ood_platform_test` | `similar_username_diff_person` | **YES (hard)** | `llm_raw_no_sim` | 0.9812 | 0.9231 | 1.0000 | 0.8571 |
+| `ood_platform_test` | `same_name_diff_org_city` | **YES (hard)** | `rule_baseline` | 0.8953 | 0.8000 | 0.9091 | 0.7143 |
+| `ood_platform_test` | `same_name_diff_org_city` | **YES (hard)** | `logistic_regression` | 0.9299 | 0.8889 | 0.9231 | 0.8571 |
+| `ood_platform_test` | `same_name_diff_org_city` | **YES (hard)** | `hist_gradient_boosting` | 0.8963 | 0.8889 | 0.9231 | 0.8571 |
+| `ood_platform_test` | `same_name_diff_org_city` | **YES (hard)** | `phase_c_neural` | 0.9183 | 0.8387 | 0.7647 | 0.9286 |
+| `ood_platform_test` | `same_name_diff_org_city` | **YES (hard)** | `phase_c_plus_gnn` | 0.9570 | 0.7647 | 0.6500 | 0.9286 |
+| `ood_platform_test` | `same_name_diff_org_city` | **YES (hard)** | `llm_field_by_field` | 1.0000 | 1.0000 | 1.0000 | 1.0000 |
+| `ood_platform_test` | `same_name_diff_org_city` | **YES (hard)** | `llm_raw_no_sim` | 0.9952 | 0.9231 | 1.0000 | 0.8571 |
 
 ### 6.5 Val-Tuned Chain-Confidence Baseline
 - Val-tuned threshold: `0.01`
 - `test`: PR-AUC=0.4569, F1=0.4000, mean_pos=0.0499, mean_neg=0.0232, pct_below_0.1=0.9204
-- `ood_platform_test`: PR-AUC=0.3379, F1=0.3125, mean_pos=0.0749, mean_neg=0.0561, pct_below_0.1=0.875
+- `ood_platform_test`: PR-AUC=0.2448, F1=0.2326, mean_pos=0.1351, mean_neg=0.0624, pct_below_0.1=0.8511
 - Explanation: Multiplicative confidence decay (`prod(score * 0.85)`) compresses ~87-92% of multi-hop scores below `0.1`, collapsing threshold separability.
 
 ### 6.6 Zero-Shot LLM Judge (2 Prompt Variants)
 - Status: `ok` (provider: `g4f/GithubCopilot/gpt-4.1 (+EryzaLabs)`)
-- `minimal` (val threshold=`0.18`): test PR-AUC=0.9249 [0.8822, 0.9644], F1=0.8344 [0.7651, 0.9000], ECE=0.1135 [0.0885, 0.1470] (isotonic: 0.0806) | OOD PR-AUC=0.9982 [0.9857, 1.0000], F1=0.9538 [0.8710, 1.0000], ECE=0.0982 [0.0817, 0.1236] (isotonic: 0.0341) | tokens=65191, cost=$0.0, latency=9738.6852 ms/pair
-- `field_by_field` (val threshold=`0.17`): test PR-AUC=0.9380 [0.8973, 0.9718], F1=0.8642 [0.7974, 0.9241], ECE=0.1292 [0.1073, 0.1646] (isotonic: 0.0644) | OOD PR-AUC=0.9991 [0.9939, 1.0000], F1=0.9846 [0.9508, 1.0000], ECE=0.1053 [0.0819, 0.1342] (isotonic: 0.0256) | tokens=77269, cost=$0.0, latency=6486.8105 ms/pair
-- `raw_no_sim` (val threshold=`0.24`): test PR-AUC=0.9385 [0.9064, 0.9695], F1=0.8701 [0.8025, 0.9277], ECE=0.0815 [0.0618, 0.1141] (isotonic: 0.0589) | OOD PR-AUC=0.9853 [0.9566, 1.0000], F1=0.9153 [0.8260, 0.9831], ECE=0.1070 [0.0725, 0.1463] (isotonic: 0.0639) | tokens=356306, cost=$0.0, latency=9887.3253 ms/pair
+- `minimal` (val threshold=`0.18`): test PR-AUC=0.9249 [0.8822, 0.9644], F1=0.8344 [0.7651, 0.9000], ECE=0.1135 [0.0885, 0.1470] (isotonic: 0.0806) | OOD PR-AUC=0.9911 [0.9429, 1.0000], F1=0.8966 [0.7273, 1.0000], ECE=0.0670 [0.0521, 0.0995] (isotonic: 0.0363) | tokens=61468, cost=$0.0, latency=9738.6852 ms/pair
+- `field_by_field` (val threshold=`0.17`): test PR-AUC=0.9380 [0.8973, 0.9718], F1=0.8642 [0.7974, 0.9241], ECE=0.1292 [0.1073, 0.1646] (isotonic: 0.0644) | OOD PR-AUC=0.9952 [0.9792, 1.0000], F1=0.9655 [0.8966, 1.0000], ECE=0.0712 [0.0526, 0.0978] (isotonic: 0.0292) | tokens=72889, cost=$0.0, latency=6486.8105 ms/pair
+- `raw_no_sim` (val threshold=`0.24`): test PR-AUC=0.9385 [0.9064, 0.9695], F1=0.8701 [0.8025, 0.9277], ECE=0.0815 [0.0618, 0.1141] (isotonic: 0.0589) | OOD PR-AUC=0.9720 [0.8968, 1.0000], F1=0.9231 [0.8000, 1.0000], ECE=0.0462 [0.0315, 0.0751] (isotonic: 0.0242) | tokens=326305, cost=$0.0, latency=9887.3253 ms/pair
 
 | Split | Comparison (GNN - LLM) | ΔPR-AUC (95% CI) | PR-AUC Sig. | ΔF1 (95% CI) | F1 Sig. |
 |---|---|---:|---|---:|---|
-| `test` | `gnn_vs_llm_minimal` | +0.0119 [-0.0345, +0.0614] | not significant | +0.0002 [-0.0906, +0.0885] | not significant |
-| `test` | `gnn_vs_llm_field_by_field` | -0.0010 [-0.0419, +0.0435] | not significant | -0.0305 [-0.1087, +0.0494] | not significant |
-| `test` | `gnn_vs_llm_raw_no_sim` | -0.0015 [-0.0384, +0.0367] | not significant | -0.0357 [-0.1101, +0.0401] | not significant |
-| `ood_platform_test` | `gnn_vs_llm_minimal` | -0.1537 [-0.2294, -0.0805] | significant | -0.2782 [-0.3913, -0.1459] | significant |
-| `ood_platform_test` | `gnn_vs_llm_field_by_field` | -0.1555 [-0.2294, -0.0853] | significant | -0.3104 [-0.4021, -0.2144] | significant |
-| `ood_platform_test` | `gnn_vs_llm_raw_no_sim` | -0.1410 [-0.2078, -0.0734] | significant | -0.2377 [-0.3338, -0.1289] | significant |
+| `test` | `gnn_vs_llm_minimal` | +0.0108 [-0.0367, +0.0611] | not significant | +0.0109 [-0.0742, +0.0921] | not significant |
+| `test` | `gnn_vs_llm_field_by_field` | -0.0021 [-0.0430, +0.0432] | not significant | -0.0198 [-0.0898, +0.0559] | not significant |
+| `test` | `gnn_vs_llm_raw_no_sim` | -0.0025 [-0.0396, +0.0359] | not significant | -0.0250 [-0.0948, +0.0489] | not significant |
+| `ood_platform_test` | `gnn_vs_llm_minimal` | -0.0874 [-0.2417, +0.0202] | not significant | -0.4610 [-0.6876, -0.2242] | significant |
+| `ood_platform_test` | `gnn_vs_llm_field_by_field` | -0.0949 [-0.2473, +0.0000] | not significant | -0.5281 [-0.7028, -0.3422] | significant |
+| `ood_platform_test` | `gnn_vs_llm_raw_no_sim` | -0.0703 [-0.2118, +0.0087] | not significant | -0.4830 [-0.6853, -0.2825] | significant |
 
 ## 7. Generated Figures & Tables
 - PR Operating Points: `report/figures/pr_curves.png`

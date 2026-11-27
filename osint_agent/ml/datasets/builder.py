@@ -531,12 +531,26 @@ async def crawl_self_declared_profiles(
                 )
                 added = [m_rec]
                 for vurl in verified_links[:3]:
+                    v_plat = _infer_platform(vurl)
+                    v_name = _extract_username_from_url(vurl)
+                    v_bio = ""
+                    v_resp = await fetcher.get(client, vurl, check_robots=True)
+                    if v_resp is not None:
+                        v_html = v_resp.text
+                        v_tm = _TITLE_RE.search(v_html)
+                        v_dm = _META_DESC_RE.search(v_html)
+                        if v_tm:
+                            v_name = v_tm.group(1).strip()[:100]
+                        if v_dm:
+                            v_bio = v_dm.group(1).strip()
                     v_rec = ProfileRecord(
                         person_id=pid,
-                        platform=_infer_platform(vurl),
+                        platform=v_plat,
                         url=vurl,
                         username=_extract_username_from_url(vurl),
-                        display_name=m_rec.display_name,
+                        display_name=v_name,
+                        bio=v_bio,
+                        bio_emb=compute_bio_embedding(v_bio),
                         links=[acct_url],
                         label_source="mastodon_verified_rel_me",
                     )
