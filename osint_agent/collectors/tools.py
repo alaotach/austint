@@ -1502,11 +1502,74 @@ async def collect_email_intel(entity: Entity, client: httpx.AsyncClient) -> list
         except (httpx.HTTPError, httpx.TimeoutException, ValueError) as exc:
             logger.debug("Hudson Rock email lookup failed for %s: %s", email, exc)
 
+    async def _check_google_people() -> None:
+        cid = os.environ.get("GOOGLE_CLIENT_ID", "").strip()
+        csec = os.environ.get("GOOGLE_CLIENT_SECRET", "").strip()
+        rtok = os.environ.get("GOOGLE_REFRESH_TOKEN", "").strip()
+        if not (cid and csec and rtok):
+            return
+        try:
+            tok_resp = await client.post(
+                "https://oauth2.googleapis.com/token",
+                data={
+                    "client_id": cid,
+                    "client_secret": csec,
+                    "refresh_token": rtok,
+                    "grant_type": "refresh_token",
+                },
+                timeout=8.0,
+            )
+            if tok_resp.status_code != 200:
+                return
+            access_token = tok_resp.json().get("access_token", "")
+            if not access_token:
+                return
+            headers = {"Authorization": f"Bearer {access_token}"}
+            for ep in (
+                f"https://people.googleapis.com/v1/otherContacts:search?query={quote(email)}&readMask=names,photos,emailAddresses",
+                f"https://people.googleapis.com/v1/people:searchContacts?query={quote(email)}&readMask=names,photos,emailAddresses",
+            ):
+                resp = await client.get(ep, headers=headers, timeout=8.0)
+                if resp.status_code != 200:
+                    continue
+                for res_item in resp.json().get("results") or []:
+                    person = res_item.get("person") if isinstance(res_item, dict) else None
+                    if not isinstance(person, dict):
+                        continue
+                    emails_list = [str(e.get("value") or "").lower() for e in (person.get("emailAddresses") or []) if isinstance(e, dict)]
+                    if emails_list and email not in emails_list:
+                        continue
+                    names_list = [str(n.get("displayName") or "").strip() for n in (person.get("names") or []) if isinstance(n, dict)]
+                    photos_list = [str(p.get("url") or "").strip() for p in (person.get("photos") or []) if isinstance(p, dict) and p.get("url")]
+                    display_name = next((n for n in names_list if n), "")
+                    photo_url = next((u for u in photos_list if u.startswith("http")), "")
+                    if display_name or photo_url:
+                        _add_hit(
+                            Hit(
+                                target_entity_id=entity.id,
+                                discovered_type=EntityType.PROFILE,
+                                discovered_value=f"https://contacts.google.com/search/{quote(email)}",
+                                relation="google_people_match",
+                                source_tool="email_intel",
+                                is_trusted=True,
+                                raw_data={"site": "google", "name": display_name, "avatar_url": photo_url},
+                                metadata={
+                                    "site": "google",
+                                    "email": email,
+                                    **({"name": display_name} if display_name else {}),
+                                    **({"avatar_url": photo_url, "images": [photo_url]} if photo_url else {}),
+                                },
+                            )
+                        )
+        except Exception as exc:
+            logger.debug("Google People lookup failed for %s: %s", email, exc)
+
     tasks = [
         _check_gravatar(),
         _check_github(),
         _check_duolingo(),
         _check_pgp_keyservers(),
+        _check_google_people(),
     ]
     if os.getenv("OSINT_ENABLE_BREACH_INTEL") == "1":
         tasks.extend([_check_xposedornot(), _check_hudson_rock_email()])

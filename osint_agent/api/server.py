@@ -538,6 +538,63 @@ async def delete_saved_run(run_id: str) -> dict[str, Any]:
     return {"status": "deleted", "id": run_id}
 
 
+@app.get("/api/google-oauth/start", tags=["System"])
+async def google_oauth_start(request: Request) -> Any:
+    """Redirect to Google OAuth2 consent screen to obtain a People API refresh token."""
+    from urllib.parse import urlencode
+    from fastapi.responses import RedirectResponse
+
+    cid = os.getenv("GOOGLE_CLIENT_ID", "").strip()
+    if not cid:
+        raise HTTPException(status_code=400, detail="GOOGLE_CLIENT_ID is not configured in .env")
+    redirect_uri = str(request.url_for("google_oauth_callback"))
+    params = urlencode({
+        "client_id": cid,
+        "redirect_uri": redirect_uri,
+        "response_type": "code",
+        "scope": "https://www.googleapis.com/auth/contacts.readonly https://www.googleapis.com/auth/contacts.other.readonly",
+        "access_type": "offline",
+        "prompt": "consent",
+    })
+    return RedirectResponse(f"https://accounts.google.com/o/oauth2/v2/auth?{params}")
+
+
+@app.get("/api/google-oauth/callback", tags=["System"])
+async def google_oauth_callback(request: Request, code: str | None = None, error: str | None = None) -> Any:
+    """Exchange Google OAuth2 authorization code for a refresh token and save to .env."""
+    import httpx
+    from fastapi.responses import HTMLResponse
+
+    if error or not code:
+        return HTMLResponse(f"<h3>Google OAuth failed</h3><pre>{error or 'missing code'}</pre>", status_code=400)
+    cid = os.getenv("GOOGLE_CLIENT_ID", "").strip()
+    csec = os.getenv("GOOGLE_CLIENT_SECRET", "").strip()
+    redirect_uri = str(request.url_for("google_oauth_callback"))
+    async with httpx.AsyncClient() as client:
+        resp = await client.post(
+            "https://oauth2.googleapis.com/token",
+            data={
+                "code": code,
+                "client_id": cid,
+                "client_secret": csec,
+                "redirect_uri": redirect_uri,
+                "grant_type": "authorization_code",
+            },
+            timeout=12.0,
+        )
+    data = resp.json() if resp.headers.get("content-type", "").startswith("application/json") else {"raw": resp.text}
+    rtok = data.get("refresh_token", "")
+    if not rtok:
+        return HTMLResponse(f"<h3>No refresh_token returned</h3><pre>{json.dumps(data, indent=2)}</pre>", status_code=400)
+    os.environ["GOOGLE_REFRESH_TOKEN"] = rtok
+    env_path = Path(__file__).resolve().parent.parent.parent / ".env"
+    txt = env_path.read_text(encoding="utf-8") if env_path.exists() else ""
+    lines = [ln for ln in txt.splitlines() if not ln.startswith("GOOGLE_REFRESH_TOKEN=")]
+    lines.append(f"GOOGLE_REFRESH_TOKEN={rtok}")
+    env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return HTMLResponse("<h3>Google People API connected!</h3><p>Refresh token saved to .env. You can close this tab and run your email scan.</p>")
+
+
 @app.get("/api/health", tags=["System"])
 async def health_check() -> dict[str, Any]:
     """Check API server health and catalog available tool collectors."""
