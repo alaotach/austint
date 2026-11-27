@@ -363,6 +363,29 @@ class OpenRouterClient(BaseClient):
             "https://ai.hackclub.com/proxy/v1/chat/completions",
         )
 
+    @staticmethod
+    def _download_image_as_data_uri(img_url: str, max_bytes: int = 2_000_000) -> str | None:
+        import base64
+        from urllib.parse import urlparse
+
+        try:
+            from osint_agent.collectors.enrich import is_private_or_loopback_host
+
+            host = urlparse(img_url).netloc
+            if not host or is_private_or_loopback_host(host):
+                return None
+            with httpx.Client(timeout=6.0, follow_redirects=True) as dl:
+                resp = dl.get(img_url, headers={"User-Agent": "OSINT-Agent/1.0"})
+                if resp.status_code != 200 or not resp.content or len(resp.content) > max_bytes:
+                    return None
+                ctype = (resp.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+                if not ctype.startswith("image/") or "svg" in ctype:
+                    return None
+                b64 = base64.b64encode(resp.content).decode("ascii")
+                return f"data:{ctype};base64,{b64}"
+        except Exception:
+            return None
+
     def complete_json(self, system: str, user: str, max_tokens: int = 2048) -> dict[str, Any]:
         return self.complete_multimodal_json(system=system, user=user, image_urls=None, max_tokens=max_tokens)
 
@@ -399,6 +422,17 @@ class OpenRouterClient(BaseClient):
                 or u.startswith("data:image/")
             )
         ]
+
+        if valid_images and "eryzalabs" in (self.base_url or "").lower():
+            resolved_images: list[str] = []
+            for img_url in valid_images:
+                if img_url.startswith("data:image/"):
+                    resolved_images.append(img_url)
+                    continue
+                b64_uri = self._download_image_as_data_uri(img_url)
+                if b64_uri:
+                    resolved_images.append(b64_uri)
+            valid_images = resolved_images
 
         if valid_images:
             user_content: Any = [{"type": "text", "text": user}]
@@ -556,6 +590,29 @@ class G4FClient(BaseClient):
             call_budget=remaining,
             timeout=self.timeout,
         )
+
+    @staticmethod
+    def _download_image_as_data_uri(img_url: str, max_bytes: int = 2_000_000) -> str | None:
+        import base64
+        from urllib.parse import urlparse
+
+        try:
+            from osint_agent.collectors.enrich import is_private_or_loopback_host
+
+            host = urlparse(img_url).netloc
+            if not host or is_private_or_loopback_host(host):
+                return None
+            with httpx.Client(timeout=6.0, follow_redirects=True) as dl:
+                resp = dl.get(img_url, headers={"User-Agent": "OSINT-Agent/1.0"})
+                if resp.status_code != 200 or not resp.content or len(resp.content) > max_bytes:
+                    return None
+                ctype = (resp.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+                if not ctype.startswith("image/") or "svg" in ctype:
+                    return None
+                b64 = base64.b64encode(resp.content).decode("ascii")
+                return f"data:{ctype};base64,{b64}"
+        except Exception:
+            return None
 
     def complete_json(self, system: str, user: str, max_tokens: int = 2048) -> dict[str, Any]:
         return self.complete_multimodal_json(system=system, user=user, image_urls=None, max_tokens=max_tokens)

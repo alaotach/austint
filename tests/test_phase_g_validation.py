@@ -180,3 +180,44 @@ def test_raw_no_sim_prompt_and_isotonic_recalibration():
     p_val = np.array([0.3, 0.1, 0.4, 0.05])
     [p_cal] = recalibrate_isotonic_on_val(y_val, p_val, [np.array([0.35, 0.08])])
     assert p_cal[0] >= p_cal[1]
+
+
+
+def test_eryzalabs_downloads_image_as_base64(monkeypatch):
+    import json
+    import httpx
+    import respx
+    from osint_agent.llm.client import OpenRouterClient
+
+    monkeypatch.setenv("ERYZALABS_VISION_MODEL", "nvidia/nemotron-3.5-super-vl-120b-a12b")
+    png_bytes = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"
+
+    with respx.mock:
+        respx.get("https://cdn.example.org/pic.png").mock(
+            return_value=httpx.Response(200, content=png_bytes, headers={"Content-Type": "image/png"})
+        )
+        respx.get("https://cdn.example.org/dead.png").mock(return_value=httpx.Response(404))
+        post_route = respx.post("https://llm.eryzalabs.cloud/v1/chat/completions").mock(
+            return_value=httpx.Response(
+                200,
+                json={"choices": [{"message": {"content": '{"ok": true}'}}], "usage": {"total_tokens": 12}},
+            )
+        )
+
+        cli = OpenRouterClient(
+            api_key="test-key",
+            model="nvidia/nemotron-3.5-lightning-30b-a3b",
+            base_url="https://llm.eryzalabs.cloud/v1/chat/completions",
+            call_budget=5,
+        )
+        out = cli.complete_multimodal_json(
+            "sys",
+            "usr",
+            image_urls=["https://cdn.example.org/pic.png", "https://cdn.example.org/dead.png"],
+        )
+        assert out["ok"] is True
+        sent = json.loads(post_route.calls[0].request.content)
+        assert sent["model"] == "nvidia/nemotron-3.5-super-vl-120b-a12b"
+        img_parts = [p for p in sent["messages"][1]["content"] if p.get("type") == "image_url"]
+        assert len(img_parts) == 1
+        assert img_parts[0]["image_url"]["url"].startswith("data:image/png;base64,")
