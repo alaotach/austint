@@ -158,13 +158,16 @@ class LLMPlanner:
         system_prompt = (
             "You are an OSINT tool selection planner.\n"
             "Given a target entity type, sanitized value, numeric graph statistics, and a list of available tools, "
-            "select the most relevant tools in prioritized execution order.\n"
+            "select the relevant tools in prioritized execution order.\n"
             "Return JSON only with format:\n"
             '{"steps": [{"tool_name": "<name>", "reason": "<rationale>"}]}\n'
             "RULES:\n"
             "1. ONLY select tool names from the provided available tools list.\n"
             "2. Never select tools that are not in the provided list.\n"
-            "3. Return at most the remaining budget count."
+            "3. Return at most the remaining budget count.\n"
+            "4. Prioritize thorough coverage: include all relevant non-redundant tools from the available list "
+            "(especially code/repo, social, app-store, and web-search tools that uncover emails, domains, or orgs for expansion) "
+            "up to the remaining budget."
         )
 
         tools_desc = "\n".join(
