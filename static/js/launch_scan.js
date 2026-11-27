@@ -413,14 +413,27 @@
       window.OSINT_STATE.jobId = run.file.replace("audit_", "").replace(".jsonl", "");
       window.OSINT_STATE.auditEvents = [];
       const nodesMap = {};
+      const discoveredMeta = {};
       const edgesList = [];
       document.getElementById("header-job-id").textContent = window.OSINT_STATE.jobId;
       (run.events || []).forEach((ev) => {
         handleEvent(ev);
-        if (ev.event === "hit_evaluated" && ev.details) {
+        if (ev.event === "profile_discovered" && ev.details && ev.details.url) {
+          const pd = ev.details;
+          discoveredMeta[pd.url] = {
+            site: pd.site || "",
+            url: pd.url,
+            username: pd.username || "",
+          };
+          const id = `profile:${pd.url}`;
+          if (nodesMap[id]) {
+            Object.assign(nodesMap[id].data.attributes, discoveredMeta[pd.url]);
+          }
+        } else if (ev.event === "hit_evaluated" && ev.details) {
           const d = ev.details;
           const id = `${d.discovered_type || "node"}:${d.discovered_value}`;
           const meta = d.metadata || {};
+          const disc = discoveredMeta[d.discovered_value] || {};
           if (!nodesMap[id]) {
             nodesMap[id] = {
               data: {
@@ -430,7 +443,7 @@
                 confidence: Number(d.child_confidence ?? d.resolver_score ?? 0.5),
                 depth: 1,
                 provenance: [`${d.tool || "collector"}:discovered`],
-                attributes: { ...meta, source_tool: d.tool || "", resolver_score: d.resolver_score },
+                attributes: { ...disc, ...meta, source_tool: d.tool || "", resolver_score: d.resolver_score },
               },
             };
           }
@@ -444,16 +457,6 @@
               source_tool: d.tool || "unknown",
             },
           });
-        } else if (ev.event === "profile_discovered" && ev.details && ev.details.url) {
-          const pd = ev.details;
-          const id = `profile:${pd.url}`;
-          if (nodesMap[id]) {
-            Object.assign(nodesMap[id].data.attributes, {
-              site: pd.site || nodesMap[id].data.attributes.site,
-              url: pd.url,
-              username: pd.username || nodesMap[id].data.attributes.username,
-            });
-          }
         }
       });
       window.OSINT_STATE.nodes = Object.values(nodesMap);

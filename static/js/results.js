@@ -24,17 +24,35 @@
 
   function computeCoverageClient(nodeData) {
     if (nodeData.field_coverage) return nodeData.field_coverage;
-    const attrs = nodeData.attributes || {};
-    const expected = nodeData.type === "profile"
+    const attrs = { ...(nodeData.attributes || {}) };
+    if (String(nodeData.label || "").startsWith("http") && !attrs.url) {
+      attrs.url = nodeData.label;
+    }
+    if (nodeData.type === "username" && nodeData.label && !attrs.username) {
+      attrs.username = nodeData.label;
+    }
+    const srcTool = attrs.source_tool || "";
+    const collectorMeta = (window.OSINT_COLLECTORS || []).find((c) => c.name === srcTool);
+    const expected = collectorMeta?.expected_fields?.length
+      ? collectorMeta.expected_fields
+      : nodeData.type === "profile"
       ? ["username", "name", "bio", "location", "joined", "followers", "links", "avatar", "banner", "orgs", "activity_dates"]
       : nodeData.type === "domain"
       ? ["domain", "registrar", "created", "nameservers", "ip"]
       : nodeData.type === "email"
       ? ["email", "username", "name", "links"]
       : ["name", "url", "description", "location"];
+    const aliasMap = {
+      name: [attrs.name, attrs.display_name, attrs.title],
+      links: [attrs.links, attrs.linked_urls, attrs.website, attrs.url],
+      avatar: [attrs.avatar, attrs.avatar_url],
+      banner: [attrs.banner, attrs.banner_url],
+      joined: [attrs.joined, attrs.created_at, attrs.created],
+      activity_dates: [attrs.activity_dates, attrs.updated_at, attrs.last_active, attrs.published_date],
+    };
     const present = expected.filter((f) => {
-      const v = attrs[f] ?? attrs[f + "_url"] ?? (f === "links" ? attrs.linked_urls || attrs.website : null);
-      return v !== undefined && v !== null && v !== "" && (!Array.isArray(v) || v.length > 0);
+      const cands = aliasMap[f] || [attrs[f]];
+      return cands.some((v) => v !== undefined && v !== null && v !== "" && (!Array.isArray(v) || v.length > 0));
     });
     const missing = expected.filter((f) => !present.includes(f));
     return {
