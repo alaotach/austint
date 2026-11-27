@@ -159,7 +159,20 @@
     const selected = window.OSINT_STATE.selectedNodeId === d.id ? "is-selected" : "";
     const rawLabel = String(d.label || "");
     const isSensitiveRecord = /^(breach|breach-analytics|infostealer):/i.test(rawLabel) || Boolean(attrs.phone || attrs.phones || attrs.breach || attrs.stealer_family);
-    const displayLabel = isSensitiveRecord ? `[Sensitive Finding: ${rawLabel.split(":")[0]}]` : rawLabel;
+    const cleanUrlTitle = (urlStr) => {
+      const candidate = [attrs.title, attrs.name, attrs.display_name, attrs.site].find(
+        (v) => typeof v === "string" && v.trim() && !/^https?:\/\//i.test(v.trim())
+      );
+      if (candidate) return candidate.trim();
+      try {
+        return new URL(urlStr).hostname.replace(/^www\./i, "") || urlStr;
+      } catch {
+        return urlStr;
+      }
+    };
+    const displayLabel = isSensitiveRecord
+      ? `[Sensitive Finding: ${rawLabel.split(":")[0]}]`
+      : (/^https?:\/\//i.test(rawLabel.trim()) ? cleanUrlTitle(rawLabel.trim()) : rawLabel);
 
     const bannerHtml = attrs.banner || attrs.banner_url
       ? `<div style="height:44px; border-radius:4px; background:url('${esc(attrs.banner || attrs.banner_url)}') center/cover no-repeat; margin-bottom:8px; border:1px solid var(--border-subtle);"></div>`
@@ -186,7 +199,7 @@
                 <span class="badge">${esc(attrs.site || sourceTool)}</span>
                 <span class="badge">d=${esc(d.depth ?? 0)}</span>
               </div>
-              <h3 style="margin:4px 0 0 0; font-size:14px; font-weight:700; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${esc(displayLabel)}</h3>
+              <h3 title="${esc(rawLabel)}" style="margin:4px 0 0 0; font-size:14px; font-weight:700; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${esc(displayLabel)}</h3>
             </div>
           </div>
 
