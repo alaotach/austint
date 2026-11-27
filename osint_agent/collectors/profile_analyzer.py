@@ -867,26 +867,41 @@ async def _analyze_generic_html(url: str, client: httpx.AsyncClient) -> dict[str
                     pass
 
             # og:image / twitter:image / avatar <img> & profile images
+            from urllib.parse import urljoin
             images: list[str] = list(info.get("images") or [])
+            def _push_img(raw_src: str) -> None:
+                full_u = urljoin(url, raw_src.strip())
+                low = full_u.lower().split("?")[0]
+                if not full_u.startswith(("http://", "https://")):
+                    return
+                if low.endswith((".svg", ".ico", ".gif")):
+                    return
+                if full_u not in images:
+                    images.append(full_u)
+                    if not info.get("avatar_url"):
+                        info["avatar_url"] = full_u
+
             for og_m in OG_IMAGE_PATTERN.finditer(html):
-                img_u = og_m.group(1)
-                if not img_u.lower().split("?")[0].endswith((".svg", ".ico")) and img_u not in images:
-                    images.append(img_u)
-                    if not info.get("avatar_url"):
-                        info["avatar_url"] = img_u
+                _push_img(og_m.group(1))
             for av_m in AVATAR_IMG_PATTERN.finditer(html):
-                img_u = av_m.group(1)
-                if not img_u.lower().split("?")[0].endswith((".svg", ".ico")) and img_u not in images:
-                    images.append(img_u)
-                    if not info.get("avatar_url"):
-                        info["avatar_url"] = img_u
-            if images:
-                info["images"] = images[:8]
+                _push_img(av_m.group(1))
 
             # Strip scripts, styles, nav, header, footer, aside BEFORE extracting links/emails/phones/text
             main_chunks = MAIN_CONTENT_PATTERN.findall(html)
             raw_content_html = " ".join(main_chunks) if main_chunks else html
             clean_content_html = SCRIPT_STYLE_STRIP.sub(" ", raw_content_html)
+
+            # Fallback: extract content <img> tags (including relative paths like /sites/default/files/...)
+            for img_m in re.finditer(r'<img[^>]+src=["\']([^"\'>\s]+)["\']', clean_content_html, re.IGNORECASE):
+                src_val = img_m.group(1).strip()
+                low_src = src_val.lower()
+                if low_src.startswith("data:") or any(tok in low_src for tok in ("logo", "icon", "favicon", "sprite", "spinner", "arrow", "flag", "pixel", "1x1")):
+                    continue
+                _push_img(src_val)
+                if len(images) >= 8:
+                    break
+            if images:
+                info["images"] = images[:8]
 
             mailto_emails = list(dict.fromkeys(MAILTO_PATTERN.findall(clean_content_html)))
             if not mailto_emails:
