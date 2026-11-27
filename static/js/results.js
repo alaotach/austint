@@ -280,33 +280,34 @@
     if (!hasAny) return "";
 
     return `
-      <aside class="card" style="position:sticky; top:76px; align-self:start;">
-        <div style="display:flex; align-items:center; gap:12px; margin-bottom:10px;">
-          ${primaryPhoto ? `<a href="${esc(primaryPhoto)}" target="_blank" rel="noopener noreferrer"><img src="${esc(primaryPhoto)}" alt="" onerror="this.style.display='none'" style="width:52px; height:52px; border-radius:50%; object-fit:cover; border:1px solid var(--border-strong);"></a>` : ""}
-          <div>
-            <div class="field-label">Subject Identity Dossier</div>
-            <div style="font-weight:700; font-size:15px;">${esc(Array.from(names)[0] || "Aggregated Target Intel")}</div>
-          </div>
-        </div>
-        ${row("Names & Aliases", names, false)}
-        ${row("Emails", emails, false)}
-        ${row("Phone Numbers", phones, false)}
-        ${row("Locations & Addresses", locations, false)}
-        ${row("Organizations", orgs, false)}
-        ${row("Domains & Websites", websites, true)}
-        ${photoList.length > 1 ? `
-          <div style="padding-top:8px;">
-            <div class="field-label" style="font-size:10px; margin-bottom:6px;">Collected Photos (${photoList.length})</div>
-            <div style="display:flex; flex-wrap:wrap; gap:6px;">
-              ${photoList.slice(0, 8).map((u) => `
-                <a href="${esc(u)}" target="_blank" rel="noopener noreferrer" title="${esc(u)}">
-                  <img src="${esc(u)}" alt="" loading="lazy" onerror="this.parentElement.style.display='none'" style="width:42px; height:42px; border-radius:4px; object-fit:cover; border:1px solid var(--border-subtle);">
-                </a>
-              `).join("")}
+      <section class="card" style="padding:var(--space-4);">
+        <div style="display:flex; flex-wrap:wrap; gap:var(--space-4); align-items:flex-start;">
+          <div style="display:flex; align-items:center; gap:12px; min-width:220px;">
+            ${primaryPhoto ? `<a href="${esc(primaryPhoto)}" target="_blank" rel="noopener noreferrer"><img src="${esc(primaryPhoto)}" alt="" onerror="this.style.display='none'" style="width:56px; height:56px; border-radius:50%; object-fit:cover; border:1px solid var(--border-strong);"></a>` : ""}
+            <div>
+              <div class="field-label">Subject Identity Dossier</div>
+              <div style="font-weight:700; font-size:16px;">${esc(Array.from(names)[0] || "Aggregated Target Intel")}</div>
+              ${photoList.length > 1 ? `
+                <div style="display:flex; flex-wrap:wrap; gap:4px; margin-top:6px;">
+                  ${photoList.slice(0, 8).map((u) => `
+                    <a href="${esc(u)}" target="_blank" rel="noopener noreferrer" title="${esc(u)}">
+                      <img src="${esc(u)}" alt="" loading="lazy" onerror="this.parentElement.style.display='none'" style="width:30px; height:30px; border-radius:4px; object-fit:cover; border:1px solid var(--border-subtle);">
+                    </a>
+                  `).join("")}
+                </div>
+              ` : ""}
             </div>
           </div>
-        ` : ""}
-      </aside>
+          <div style="flex:1; min-width:280px; display:grid; grid-template-columns:repeat(auto-fit, minmax(190px, 1fr)); gap:0 var(--space-4);">
+            ${row("Names & Aliases", names, false)}
+            ${row("Emails", emails, false)}
+            ${row("Phone Numbers", phones, false)}
+            ${row("Locations & Addresses", locations, false)}
+            ${row("Organizations", orgs, false)}
+            ${row("Domains & Websites", websites, true)}
+          </div>
+        </div>
+      </section>
     `;
   }
 
@@ -344,21 +345,20 @@
         </div>
       </div>
 
-      <div style="display:grid; grid-template-columns:${dossierHtml ? "minmax(260px, 310px) 1fr" : "1fr"}; gap:var(--space-4); align-items:start;">
-        ${dossierHtml}
-        <div>
-          ${visible.length ? `
-            <div class="grid-3" id="results-cards-grid">
-              ${visible.map((n, i) => renderResultCard(n, i)).join("")}
+      ${dossierHtml}
+
+      <div>
+        ${visible.length ? `
+          <div id="results-cards-grid" style="display:grid; grid-template-columns:repeat(auto-fill, minmax(280px, 1fr)); gap:var(--space-3);">
+            ${visible.map((n, i) => renderResultCard(n, i)).join("")}
+          </div>
+          ${filtered.length > visibleLimit ? `
+            <div class="state-panel" style="display:flex; align-items:center; justify-content:center; gap:12px; flex-wrap:wrap;">
+              <span>Windowed DOM (${visible.length} of ${filtered.length} cards rendered for 60fps performance)</span>
+              <button type="button" class="btn btn-sm btn-primary" id="btn-load-more-cards">Load +100 Cards</button>
             </div>
-            ${filtered.length > visibleLimit ? `
-              <div class="state-panel" style="display:flex; align-items:center; justify-content:center; gap:12px; flex-wrap:wrap;">
-                <span>Windowed DOM (${visible.length} of ${filtered.length} cards rendered for 60fps performance)</span>
-                <button type="button" class="btn btn-sm btn-primary" id="btn-load-more-cards">Load +100 Cards</button>
-              </div>
-            ` : ""}
-          ` : `<div class="state-panel">No entities match the current filter. Run a scan or click "Load Recorded Run" on Launch.</div>`}
-        </div>
+          ` : ""}
+        ` : `<div class="state-panel">No entities match the current filter. Run a scan or click "Load Recorded Run" on Launch.</div>`}
       </div>
     `;
 
