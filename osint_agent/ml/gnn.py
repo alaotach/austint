@@ -857,7 +857,10 @@ class NeuralGNNResolver(BaseResolver):
     def load(cls, path: str | Path) -> "NeuralGNNResolver":
         from osint_agent.ml.neural import MultimodalIdentityNet
 
-        payload = torch.load(Path(path), map_location="cpu", weights_only=True)
+        try:
+            payload = torch.load(Path(path), map_location="cpu", weights_only=True)
+        except Exception:
+            payload = torch.load(Path(path), map_location="cpu", weights_only=False)
         n_model = MultimodalIdentityNet(
             bio_dim=int(payload["bio_dim"]),
             clip_dim=int(payload["clip_dim"]),

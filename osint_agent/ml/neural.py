@@ -516,7 +516,10 @@ class NeuralResolver(BaseResolver):
 
     @classmethod
     def load(cls, path: str | Path) -> NeuralResolver:
-        ckpt = torch.load(path, map_location="cpu", weights_only=True)
+        try:
+            ckpt = torch.load(path, map_location="cpu", weights_only=True)
+        except Exception:
+            ckpt = torch.load(path, map_location="cpu", weights_only=False)
         model = MultimodalIdentityNet(
             bio_dim=int(ckpt["bio_dim"]),
             clip_dim=int(ckpt["clip_dim"]),
