@@ -231,6 +231,15 @@
     const websites = new Set();
     const photos = new Set();
 
+    const photoItems = [];
+    const seenPhotoUrls = new Set();
+    const pushPhoto = (u, srcLabel, linkUrl) => {
+      if (typeof u === "string" && u.startsWith("http") && !seenPhotoUrls.has(u)) {
+        seenPhotoUrls.add(u);
+        photos.add(u);
+        photoItems.push({ url: u, source: srcLabel || "", pageUrl: linkUrl || u });
+      }
+    };
     const addStr = (set, v) => {
       const s = String(v || "").trim();
       if (s && s.length < 220) set.add(s);
@@ -240,6 +249,8 @@
       const d = n.data || {};
       const a = d.attributes || {};
       const ef = a.extra_fields || {};
+      const srcLabel = a.site || a.source_tool || d.type || "";
+      const pageUrl = a.url || (String(d.label || "").startsWith("http") ? d.label : "");
       if (d.type === "email") addStr(emails, d.label);
       if (d.type === "org") addStr(orgs, d.label);
       if (d.type === "domain") addStr(websites, d.label);
@@ -251,13 +262,11 @@
       [a.company, a.developer_name, ef.developer_name].forEach((x) => addStr(orgs, x));
       (a.orgs || []).forEach((x) => addStr(orgs, x));
       if (typeof a.website === "string" && a.website.startsWith("http")) addStr(websites, a.website);
-      [a.avatar_url, a.avatar].forEach((u) => {
-        if (typeof u === "string" && u.startsWith("http")) photos.add(u);
-      });
-      (a.images || []).forEach((u) => {
-        if (typeof u === "string" && u.startsWith("http")) photos.add(u);
-      });
+      [a.avatar_url, a.avatar].forEach((u) => pushPhoto(u, srcLabel, pageUrl));
+      (a.images || []).forEach((u) => pushPhoto(u, srcLabel, pageUrl));
     });
+
+    window.__OSINT_DOSSIER_PHOTOS = photoItems;
 
     const photoList = Array.from(photos);
     const primaryPhoto = photoList[0] || "";
@@ -287,13 +296,14 @@
             <div>
               <div class="field-label">Subject Identity Dossier</div>
               <div style="font-weight:700; font-size:16px;">${esc(Array.from(names)[0] || "Aggregated Target Intel")}</div>
-              ${photoList.length > 1 ? `
-                <div style="display:flex; flex-wrap:wrap; gap:4px; margin-top:6px;">
-                  ${photoList.slice(0, 8).map((u) => `
-                    <a href="${esc(u)}" target="_blank" rel="noopener noreferrer" title="${esc(u)}">
+              ${photoList.length ? `
+                <div style="display:flex; flex-wrap:wrap; align-items:center; gap:4px; margin-top:6px;">
+                  ${photoList.slice(0, 6).map((u) => `
+                    <a href="${esc(u)}" class="dossier-photo-trigger" title="Open Gallery">
                       <img src="${esc(u)}" alt="" loading="lazy" onerror="this.parentElement.style.display='none'" style="width:30px; height:30px; border-radius:4px; object-fit:cover; border:1px solid var(--border-subtle);">
                     </a>
                   `).join("")}
+                  <button type="button" class="btn btn-sm" id="btn-open-photo-gallery" style="font-size:11px; padding:3px 8px;">Gallery (${photoList.length})</button>
                 </div>
               ` : ""}
             </div>
@@ -330,6 +340,20 @@
       return true;
     });
 
+    filtered.sort((a, b) => {
+      const da = a.data || {};
+      const db = b.data || {};
+      const ca = Number(da.confidence ?? 0);
+      const cb = Number(db.confidence ?? 0);
+      if (Math.abs(cb - ca) > 1e-6) return cb - ca;
+      const fa = computeCoverageClient(da).extracted_count || 0;
+      const fb = computeCoverageClient(db).extracted_count || 0;
+      if (fb !== fa) return fb - fa;
+      const pa = da.type === "profile" ? 1 : 0;
+      const pb = db.type === "profile" ? 1 : 0;
+      return pb - pa;
+    });
+
     const visible = filtered.slice(0, visibleLimit);
     const dossierHtml = buildDossierHtml(allNodes);
 
@@ -361,6 +385,14 @@
         ` : `<div class="state-panel">No entities match the current filter. Run a scan or click "Load Recorded Run" on Launch.</div>`}
       </div>
     `;
+
+    document.getElementById("btn-open-photo-gallery")?.addEventListener("click", openPhotoGalleryModal);
+    container.querySelectorAll(".dossier-photo-trigger").forEach((el) => {
+      el.addEventListener("click", (e) => {
+        e.preventDefault();
+        openPhotoGalleryModal();
+      });
+    });
 
     document.getElementById("btn-load-more-cards")?.addEventListener("click", () => {
       visibleLimit += 100;
@@ -401,6 +433,50 @@
         }
       });
     });
+  }
+
+  function openPhotoGalleryModal() {
+    const items = window.__OSINT_DOSSIER_PHOTOS || [];
+    let modal = document.getElementById("osint-photo-gallery-modal");
+    if (modal) modal.remove();
+    modal = document.createElement("div");
+    modal.id = "osint-photo-gallery-modal";
+    modal.style.cssText = "position:fixed; inset:0; z-index:9999; background:rgba(8,12,20,0.88); backdrop-filter:blur(4px); display:flex; align-items:center; justify-content:center; padding:24px;";
+    modal.innerHTML = `
+      <div class="card" style="max-width:1040px; width:100%; max-height:88vh; display:flex; flex-direction:column; gap:12px; padding:20px;">
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+          <div>
+            <div class="field-label">Collected Photos &amp; Media</div>
+            <div style="font-weight:700; font-size:16px;">${items.length} Images</div>
+          </div>
+          <button type="button" class="btn btn-sm" id="btn-close-photo-gallery">Close (Esc)</button>
+        </div>
+        <div style="overflow-y:auto; display:grid; grid-template-columns:repeat(auto-fill, minmax(150px, 1fr)); gap:12px; padding-right:4px;">
+          ${items.map((it) => `
+            <div class="card" style="padding:8px; display:flex; flex-direction:column; gap:6px;">
+              <a href="${esc(it.url)}" target="_blank" rel="noopener noreferrer" style="display:block; aspect-ratio:1/1; overflow:hidden; border-radius:4px; background:var(--bg-elevated);">
+                <img src="${esc(it.url)}" alt="" loading="lazy" onerror="this.closest('.card').style.display='none'" style="width:100%; height:100%; object-fit:cover; display:block;">
+              </a>
+              <div class="mono" style="font-size:10px; color:var(--text-muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${esc(it.source || "image")}</div>
+              <a href="${esc(it.url)}" target="_blank" rel="noopener noreferrer" class="btn btn-sm" style="font-size:10px; text-align:center;">Open Original</a>
+            </div>
+          `).join("")}
+        </div>
+      </div>
+    `;
+    document.body.appendChild(modal);
+    const close = () => {
+      modal.remove();
+      document.removeEventListener("keydown", onKey);
+    };
+    const onKey = (e) => {
+      if (e.key === "Escape") close();
+    };
+    document.getElementById("btn-close-photo-gallery")?.addEventListener("click", close);
+    modal.addEventListener("click", (e) => {
+      if (e.target === modal) close();
+    });
+    document.addEventListener("keydown", onKey);
   }
 
   window.renderResultsView = renderResultsView;
