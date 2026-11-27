@@ -449,8 +449,10 @@ class OpenRouterClient(BaseClient):
                         retry_after = int(resp.headers.get("Retry-After", 0) or 0)
                         cooldown = max(retry_after, 90)
                         _RATE_LIMIT_COOLDOWN_UNTIL = time.monotonic() + cooldown
+                        prov_lbl = "EryzaLabs" if "eryzalabs" in (self.base_url or "").lower() else "OpenRouter"
                         logger.warning(
-                            "OpenRouter 429 rate-limited — tripping %ds cooldown and falling back to ML.",
+                            "%s 429 rate-limited — tripping %ds cooldown and falling back to ML.",
+                            prov_lbl,
                             cooldown,
                         )
                         raise LLMRateLimitError("429 Too Many Requests — circuit breaker tripped")
