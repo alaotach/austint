@@ -149,6 +149,17 @@
           <span class="mono" style="font-size:12px; color: var(--rejected);" id="launch-error"></span>
         </div>
       </div>
+
+      <div class="card" style="display:flex; flex-direction:column; gap: var(--space-3);">
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+          <div>
+            <div class="field-label">Saved Snapshots (Quick Access)</div>
+            <div style="font-size:12px; color:var(--text-muted);">Reload previously saved investigations without re-running collectors.</div>
+          </div>
+          <button type="button" class="btn btn-sm" id="btn-refresh-saved">Refresh</button>
+        </div>
+        <div id="saved-runs-list" class="mono" style="font-size:12px; color:var(--text-muted);">Loading saved snapshots...</div>
+      </div>
     `;
 
     // Wire launch mode tabs
@@ -239,7 +250,72 @@
     if (demoBtn) {
       demoBtn.addEventListener("click", () => loadRecordedDemoRun(true));
     }
+    document.getElementById("btn-refresh-saved")?.addEventListener("click", refreshSavedRuns);
+    refreshSavedRuns();
   }
+
+  async function refreshSavedRuns() {
+    const el = document.getElementById("saved-runs-list");
+    if (!el) return;
+    try {
+      const r = await fetch("/api/saved-runs");
+      if (!r.ok) {
+        el.textContent = "Could not load saved snapshots.";
+        return;
+      }
+      const data = await r.json();
+      const runs = data.runs || [];
+      if (!runs.length) {
+        el.textContent = "No saved snapshots yet. Run a scan and click \"Save Snapshot\" on the Results tab.";
+        return;
+      }
+      el.innerHTML = runs.map((run) => `
+        <div style="display:flex; align-items:center; justify-content:space-between; gap:8px; padding:8px 10px; border:1px solid var(--border-subtle); border-radius:6px; margin-bottom:6px; background:var(--bg-elevated);">
+          <div>
+            <strong style="color:var(--text-primary);">${esc(run.name)}</strong>
+            <span style="margin-left:8px; color:var(--text-muted);">${run.nodes_count} nodes · ${run.edges_count} edges · ${esc(String(run.created_at || "").slice(0, 16).replace("T", " "))}</span>
+          </div>
+          <div style="display:flex; gap:6px;">
+            <button type="button" class="btn btn-sm btn-primary" data-load-saved="${esc(run.id)}">Load</button>
+            <button type="button" class="btn btn-sm" data-del-saved="${esc(run.id)}">Delete</button>
+          </div>
+        </div>
+      `).join("");
+
+      el.querySelectorAll("[data-load-saved]").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          const rid = btn.dataset.loadSaved;
+          const resp = await fetch(`/api/saved-runs/${encodeURIComponent(rid)}`);
+          if (!resp.ok) return;
+          const snap = await resp.json();
+          window.OSINT_STATE.isRecordedRun = true;
+          window.OSINT_STATE.jobId = snap.job_id || snap.id;
+          window.OSINT_STATE.nodes = snap.nodes || [];
+          window.OSINT_STATE.edges = snap.edges || [];
+          window.OSINT_STATE.auditEvents = snap.audit_events || [];
+          document.getElementById("header-job-id").textContent = window.OSINT_STATE.jobId || "--";
+          document.getElementById("header-node-count").textContent = String(window.OSINT_STATE.nodes.length);
+          document.getElementById("header-edge-count").textContent = String(window.OSINT_STATE.edges.length);
+          document.getElementById("nav-badge-results").textContent = String(window.OSINT_STATE.nodes.length);
+          document.getElementById("nav-badge-audit").textContent = String(window.OSINT_STATE.auditEvents.length);
+          if (typeof window.onGraphUpdated === "function") window.onGraphUpdated();
+          if (typeof window.onAuditUpdated === "function") window.onAuditUpdated();
+          window.OSINT_UI.switchView("results");
+        });
+      });
+
+      el.querySelectorAll("[data-del-saved]").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          const rid = btn.dataset.delSaved;
+          await fetch(`/api/saved-runs/${encodeURIComponent(rid)}`, { method: "DELETE" });
+          refreshSavedRuns();
+        });
+      });
+    } catch (_) {
+      el.textContent = "Could not load saved snapshots.";
+    }
+  }
+  window.refreshSavedRuns = refreshSavedRuns;
 
   async function startInvestigation() {
     const errEl = document.getElementById("launch-error");

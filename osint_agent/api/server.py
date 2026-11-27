@@ -446,6 +446,96 @@ async def list_recorded_runs() -> dict[str, Any]:
     return {"runs": runs}
 
 
+SAVED_RUNS_DIR = Path(__file__).resolve().parent.parent.parent / "data" / "saved_runs"
+
+
+class SaveRunRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=120)
+    job_id: str | None = None
+    nodes: list[dict[str, Any]] = Field(default_factory=list)
+    edges: list[dict[str, Any]] = Field(default_factory=list)
+    audit_events: list[dict[str, Any]] = Field(default_factory=list)
+
+
+def _safe_run_path(run_id: str) -> Path:
+    import re
+
+    clean = re.sub(r"[^A-Za-z0-9_.-]+", "", run_id or "")
+    if not clean or clean in (".", ".."):
+        raise HTTPException(status_code=400, detail="Invalid saved run id.")
+    return SAVED_RUNS_DIR / f"{clean}.json"
+
+
+@app.get("/api/saved-runs", tags=["System"])
+async def list_saved_runs() -> dict[str, Any]:
+    """List user-saved investigation snapshots for quick access."""
+    if not SAVED_RUNS_DIR.exists():
+        return {"runs": []}
+    runs = []
+    for p in sorted(SAVED_RUNS_DIR.glob("*.json"), key=lambda x: x.stat().st_mtime, reverse=True):
+        try:
+            d = json.loads(p.read_text(encoding="utf-8"))
+            runs.append(
+                {
+                    "id": p.stem,
+                    "name": d.get("name", p.stem),
+                    "job_id": d.get("job_id"),
+                    "created_at": d.get("created_at"),
+                    "nodes_count": len(d.get("nodes") or []),
+                    "edges_count": len(d.get("edges") or []),
+                }
+            )
+        except Exception:
+            pass
+    return {"runs": runs}
+
+
+@app.post("/api/saved-runs", tags=["System"])
+async def save_run_snapshot(req: SaveRunRequest) -> dict[str, Any]:
+    """Persist an investigation snapshot to disk for quick reload."""
+    import re
+
+    SAVED_RUNS_DIR.mkdir(parents=True, exist_ok=True)
+    slug = re.sub(r"[^A-Za-z0-9_-]+", "_", req.name.strip()).strip("_")[:40] or "snapshot"
+    run_id = f"{slug}_{uuid.uuid4().hex[:6]}"
+    payload = {
+        "id": run_id,
+        "name": req.name.strip(),
+        "job_id": req.job_id,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "nodes": req.nodes,
+        "edges": req.edges,
+        "audit_events": req.audit_events[-500:],
+    }
+    _safe_run_path(run_id).write_text(json.dumps(payload), encoding="utf-8")
+    return {
+        "status": "saved",
+        "id": run_id,
+        "name": payload["name"],
+        "nodes_count": len(req.nodes),
+        "edges_count": len(req.edges),
+    }
+
+
+@app.get("/api/saved-runs/{run_id}", tags=["System"])
+async def get_saved_run(run_id: str) -> dict[str, Any]:
+    """Load a previously saved investigation snapshot."""
+    p = _safe_run_path(run_id)
+    if not p.exists():
+        raise HTTPException(status_code=404, detail="Saved run not found.")
+    return json.loads(p.read_text(encoding="utf-8"))
+
+
+@app.delete("/api/saved-runs/{run_id}", tags=["System"])
+async def delete_saved_run(run_id: str) -> dict[str, Any]:
+    """Delete a saved investigation snapshot."""
+    p = _safe_run_path(run_id)
+    if not p.exists():
+        raise HTTPException(status_code=404, detail="Saved run not found.")
+    p.unlink()
+    return {"status": "deleted", "id": run_id}
+
+
 @app.get("/api/health", tags=["System"])
 async def health_check() -> dict[str, Any]:
     """Check API server health and catalog available tool collectors."""

@@ -194,3 +194,36 @@ def test_api_analyze_image_and_similarity() -> None:
 
     # 3. Perceptual similarity identical image == 1.0
     assert compare_image_bytes(img_bytes, img_bytes) == 1.0
+
+
+
+def test_saved_runs_crud(tmp_path, monkeypatch) -> None:
+    """POST/GET/DELETE /api/saved-runs should persist and reload investigation snapshots."""
+    import osint_agent.api.server as srv
+
+    monkeypatch.setattr(srv, "SAVED_RUNS_DIR", tmp_path / "saved_runs")
+    r_save = client.post(
+        "/api/saved-runs",
+        json={
+            "name": "alaotach snapshot",
+            "job_id": "job123",
+            "nodes": [{"data": {"id": "p1", "label": "https://github.com/alaotach", "type": "profile"}}],
+            "edges": [],
+            "audit_events": [],
+        },
+    )
+    assert r_save.status_code == 200
+    rid = r_save.json()["id"]
+
+    r_list = client.get("/api/saved-runs")
+    assert r_list.status_code == 200
+    assert len(r_list.json()["runs"]) == 1
+    assert r_list.json()["runs"][0]["id"] == rid
+
+    r_get = client.get(f"/api/saved-runs/{rid}")
+    assert r_get.status_code == 200
+    assert r_get.json()["nodes"][0]["data"]["label"] == "https://github.com/alaotach"
+
+    r_del = client.delete(f"/api/saved-runs/{rid}")
+    assert r_del.status_code == 200
+    assert client.get("/api/saved-runs").json()["runs"] == []

@@ -362,10 +362,11 @@
         <div style="display:flex; flex-wrap:wrap; gap:6px;">
           ${types.map((t) => `<button type="button" class="tab-btn ${typeFilter === t ? "active" : ""}" data-rtype="${esc(t)}">${esc(t)}</button>`).join("")}
         </div>
-        <div style="display:flex; align-items:center; gap:8px;">
+        <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
           <label class="mono" style="font-size:11px; color:var(--text-muted);" for="filter-min-conf">Min Conf: <strong id="lbl-min-conf">${Math.round(minConfFilter * 100)}%</strong></label>
           <input type="range" id="filter-min-conf" min="0" max="0.9" step="0.1" value="${minConfFilter}">
           <span class="badge">${visible.length} / ${filtered.length}</span>
+          ${allNodes.length ? `<button type="button" class="btn btn-sm btn-primary" id="btn-save-snapshot">Save Snapshot</button>` : ""}
         </div>
       </div>
 
@@ -385,6 +386,39 @@
         ` : `<div class="state-panel">No entities match the current filter. Run a scan or click "Load Recorded Run" on Launch.</div>`}
       </div>
     `;
+
+    document.getElementById("btn-save-snapshot")?.addEventListener("click", async () => {
+      const btn = document.getElementById("btn-save-snapshot");
+      const defaultName = window.OSINT_STATE.jobId || (allNodes[0]?.data?.label) || "osint_snapshot";
+      const name = window.prompt("Save snapshot as:", defaultName);
+      if (!name || !name.trim()) return;
+      if (btn) btn.disabled = true;
+      try {
+        const resp = await fetch("/api/saved-runs", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            name: name.trim(),
+            job_id: window.OSINT_STATE.jobId || null,
+            nodes: window.OSINT_STATE.nodes || [],
+            edges: window.OSINT_STATE.edges || [],
+            audit_events: window.OSINT_STATE.auditEvents || [],
+          }),
+        });
+        if (resp.ok && btn) {
+          btn.textContent = "Saved!";
+          if (typeof window.refreshSavedRuns === "function") window.refreshSavedRuns();
+          setTimeout(() => {
+            btn.textContent = "Save Snapshot";
+            btn.disabled = false;
+          }, 1500);
+        } else if (btn) {
+          btn.disabled = false;
+        }
+      } catch (_) {
+        if (btn) btn.disabled = false;
+      }
+    });
 
     document.getElementById("btn-open-photo-gallery")?.addEventListener("click", openPhotoGalleryModal);
     container.querySelectorAll(".dossier-photo-trigger").forEach((el) => {
