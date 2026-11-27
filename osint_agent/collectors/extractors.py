@@ -111,6 +111,10 @@ class NormalizedProfile(BaseModel):
                 out["orgs"] = self.extra["orgs"]
             if self.extra.get("company"):
                 out["company"] = self.extra["company"]
+            if self.extra.get("website"):
+                out["website"] = self.extra["website"]
+            if self.extra.get("stories"):
+                out["stories"] = self.extra["stories"]
         if self.limited_public_data:
             out["limited_public_data"] = True
             out["status_note"] = self.status_note or "exists, limited public data"
@@ -199,6 +203,9 @@ async def extract_soundcloud(url: str, username: str, client: httpx.AsyncClient)
 
 @register_extractor("youtube")
 async def extract_youtube(url: str, username: str, client: httpx.AsyncClient) -> NormalizedProfile:
+    from osint_agent.llm.client import _load_dotenv
+
+    _load_dotenv()
     prof = NormalizedProfile(username=username)
     api_key = os.getenv("YOUTUBE_API_KEY", "").strip()
     handle = username.lstrip("@")
@@ -444,6 +451,210 @@ async def extract_medium(url: str, username: str, client: httpx.AsyncClient) -> 
                 if items:
                     prof.set_field("post_count", {"posts": len(items)}, "structured")
                     prof.extra["recent_posts"] = [it.findtext("title") for it in items[:5] if it.findtext("title")]
+    except Exception:
+        pass
+    return prof
+
+
+@register_extractor("github")
+async def extract_github(url: str, username: str, client: httpx.AsyncClient) -> NormalizedProfile:
+    from osint_agent.llm.client import _load_dotenv
+
+    _load_dotenv()
+    prof = NormalizedProfile(username=username)
+    headers = {"User-Agent": DEFAULT_UA, "Accept": "application/vnd.github+json"}
+    gh_tok = os.getenv("GITHUB_TOKEN", "").strip()
+    if gh_tok:
+        headers["Authorization"] = f"Bearer {gh_tok}"
+    try:
+        r = await client.get(f"https://api.github.com/users/{username}", headers=headers, timeout=8.0)
+        if r.status_code == 200:
+            d = r.json()
+            prof.set_field("display_name", d.get("name") or d.get("login"), "api")
+            prof.set_field("bio", d.get("bio"), "api")
+            prof.set_field("location", d.get("location"), "api")
+            prof.set_field("joined_at", str(d.get("created_at") or "")[:10], "api")
+            prof.set_field("last_active", str(d.get("updated_at") or "")[:10], "api")
+            prof.set_field("followers", d.get("followers"), "api")
+            prof.set_field("following", d.get("following"), "api")
+            prof.set_field("avatar_url", d.get("avatar_url"), "api")
+            if d.get("public_repos") is not None:
+                prof.set_field("post_count", {"repos": int(d["public_repos"])}, "api")
+            if d.get("company"):
+                prof.extra["company"] = str(d["company"]).strip()
+            links = [u for u in [d.get("blog")] if isinstance(u, str) and u.startswith("http")]
+            if links:
+                prof.extra["website"] = links[0]
+            rs = await client.get(f"https://api.github.com/users/{username}/social_accounts", headers=headers, timeout=8.0)
+            if rs.status_code == 200 and isinstance(rs.json(), list):
+                for s in rs.json():
+                    if isinstance(s, dict) and isinstance(s.get("url"), str) and s["url"].startswith("http"):
+                        links.append(s["url"])
+            if links:
+                prof.set_field("links", list(dict.fromkeys(links)), "api")
+        rr = await client.get(f"https://api.github.com/users/{username}/repos?sort=updated&per_page=10", headers=headers, timeout=8.0)
+        if rr.status_code == 200 and isinstance(rr.json(), list):
+            langs = list(dict.fromkeys(str(repo.get("language")) for repo in rr.json() if repo.get("language")))
+            if langs:
+                prof.extra["languages"] = langs[:8]
+        ro = await client.get(f"https://api.github.com/users/{username}/orgs", headers=headers, timeout=8.0)
+        if ro.status_code == 200 and isinstance(ro.json(), list):
+            orgs = [str(o.get("login")) for o in ro.json() if o.get("login")]
+            if orgs:
+                prof.extra["orgs"] = orgs[:8]
+    except Exception:
+        pass
+    return prof
+
+
+@register_extractor("devto")
+async def extract_devto(url: str, username: str, client: httpx.AsyncClient) -> NormalizedProfile:
+    prof = NormalizedProfile(username=username)
+    try:
+        r = await client.get(f"https://dev.to/api/users/by_username?url={username}", headers={"User-Agent": DEFAULT_UA}, timeout=8.0)
+        if r.status_code == 200:
+            d = r.json()
+            prof.set_field("display_name", d.get("name") or d.get("username"), "api")
+            prof.set_field("bio", d.get("summary"), "api")
+            prof.set_field("location", d.get("location"), "api")
+            prof.set_field("joined_at", str(d.get("joined_at") or "")[:20], "api")
+            prof.set_field("avatar_url", d.get("profile_image"), "api")
+            links = [u for u in [d.get("website_url")] if isinstance(u, str) and u.startswith("http")]
+            if d.get("github_username"):
+                links.append(f"https://github.com/{d['github_username']}")
+            if d.get("twitter_username"):
+                links.append(f"https://x.com/{d['twitter_username']}")
+            if links:
+                prof.set_field("links", list(dict.fromkeys(links)), "api")
+    except Exception:
+        pass
+    return prof
+
+
+@register_extractor("huggingface")
+async def extract_huggingface(url: str, username: str, client: httpx.AsyncClient) -> NormalizedProfile:
+    prof = NormalizedProfile(username=username)
+    try:
+        r = await client.get(f"https://huggingface.co/api/users/{username}/overview", headers={"User-Agent": DEFAULT_UA}, timeout=8.0)
+        if r.status_code == 200:
+            d = r.json()
+            prof.set_field("display_name", d.get("fullname") or d.get("user"), "api")
+            prof.set_field("bio", d.get("details"), "api")
+            prof.set_field("avatar_url", d.get("avatarUrl"), "api")
+            if d.get("numFollowers") is not None:
+                prof.set_field("followers", int(d["numFollowers"]), "api")
+            counts = {}
+            for k, label in (("numModels", "models"), ("numDatasets", "datasets"), ("numSpaces", "spaces")):
+                if d.get(k) is not None:
+                    counts[label] = int(d[k])
+            if counts:
+                prof.set_field("post_count", counts, "api")
+    except Exception:
+        pass
+    return prof
+
+
+@register_extractor("wattpad")
+async def extract_wattpad(url: str, username: str, client: httpx.AsyncClient) -> NormalizedProfile:
+    prof = NormalizedProfile(username=username)
+    try:
+        r = await client.get(
+            f"https://www.wattpad.com/api/v3/users/{username}?fields=username,name,description,avatar,numFollowers,numFollowing,numStoriesPublished,createDate,location,website",
+            headers={"User-Agent": DEFAULT_UA},
+            timeout=8.0,
+        )
+        if r.status_code == 200:
+            d = r.json()
+            prof.set_field("display_name", d.get("name") or d.get("username"), "api")
+            prof.set_field("bio", d.get("description"), "api")
+            prof.set_field("avatar_url", d.get("avatar"), "api")
+            prof.set_field("location", d.get("location"), "api")
+            if d.get("createDate"):
+                prof.set_field("joined_at", str(d["createDate"])[:10], "api")
+            if d.get("numFollowers") is not None:
+                prof.set_field("followers", int(d["numFollowers"]), "api")
+            if d.get("numFollowing") is not None:
+                prof.set_field("following", int(d["numFollowing"]), "api")
+            if d.get("numStoriesPublished") is not None:
+                prof.set_field("post_count", {"stories": int(d["numStoriesPublished"])}, "api")
+            if isinstance(d.get("website"), str) and d["website"].startswith("http"):
+                prof.set_field("links", [d["website"]], "api")
+        rs = await client.get(f"https://www.wattpad.com/api/v3/users/{username}/stories", headers={"User-Agent": DEFAULT_UA}, timeout=8.0)
+        if rs.status_code == 200:
+            stories = rs.json().get("stories") or []
+            if stories:
+                prof.extra["stories"] = [
+                    f"{s.get('title', '')} — {s.get('description', '')}".strip(" —")
+                    if isinstance(s, dict)
+                    else str(s)
+                    for s in stories[:10]
+                ]
+                if not prof.post_count:
+                    prof.set_field("post_count", {"stories": len(stories)}, "api")
+    except Exception:
+        pass
+    return prof
+
+
+@register_extractor("kaggle")
+async def extract_kaggle(url: str, username: str, client: httpx.AsyncClient) -> NormalizedProfile:
+    prof = NormalizedProfile(username=username)
+    try:
+        r = await client.get(url, headers={"User-Agent": DEFAULT_UA}, follow_redirects=True, timeout=8.0)
+        if r.status_code == 200:
+            html = r.text[:250_000]
+            og_t = re.search(r'<meta[^>]+property=["\']og:title["\'][^>]+content=["\']([^"\']+)["\']', html, re.I)
+            og_d = re.search(r'<meta[^>]+property=["\']og:description["\'][^>]+content=["\']([^"\']+)["\']', html, re.I)
+            og_i = re.search(r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\']([^"\']+)["\']', html, re.I)
+            if og_t:
+                prof.set_field("display_name", unescape(og_t.group(1)).split("|")[0].strip(), "structured")
+            if og_d:
+                prof.set_field("bio", unescape(og_d.group(1))[:400], "structured")
+            if og_i:
+                prof.set_field("avatar_url", og_i.group(1), "structured")
+            st_m = re.search(r'Kaggle\.State\.push\((\{.*?\})\)', html, re.DOTALL)
+            if st_m:
+                try:
+                    sd = json.loads(st_m.group(1))
+                    if sd.get("displayName"):
+                        prof.set_field("display_name", sd["displayName"], "structured")
+                    if sd.get("bio"):
+                        prof.set_field("bio", sd["bio"][:400], "structured")
+                    if sd.get("city") or sd.get("country"):
+                        prof.set_field("location", ", ".join(x for x in (sd.get("city"), sd.get("country")) if x), "structured")
+                    if sd.get("userAvatarUrl"):
+                        prof.set_field("avatar_url", sd["userAvatarUrl"], "structured")
+                    if sd.get("userJoinDate"):
+                        prof.set_field("joined_at", str(sd["userJoinDate"])[:10], "structured")
+                    if sd.get("followersCount") is not None:
+                        prof.set_field("followers", int(sd["followersCount"]), "structured")
+                except Exception:
+                    pass
+    except Exception:
+        pass
+    return prof
+
+
+@register_extractor("itchio")
+async def extract_itchio(url: str, username: str, client: httpx.AsyncClient) -> NormalizedProfile:
+    prof = NormalizedProfile(username=username)
+    try:
+        r = await client.get(url, headers={"User-Agent": DEFAULT_UA}, follow_redirects=True, timeout=8.0)
+        if r.status_code == 200:
+            html = r.text[:250_000]
+            og_t = re.search(r'<meta[^>]+property=["\']og:title["\'][^>]+content=["\']([^"\']+)["\']', html, re.I)
+            og_d = re.search(r'<meta[^>]+property=["\']og:description["\'][^>]+content=["\']([^"\']+)["\']', html, re.I)
+            og_i = re.search(r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\']([^"\']+)["\']', html, re.I)
+            if og_t:
+                prof.set_field("display_name", unescape(og_t.group(1)).strip(), "structured")
+            if og_d:
+                prof.set_field("bio", unescape(og_d.group(1))[:400], "structured")
+            if og_i:
+                prof.set_field("avatar_url", og_i.group(1), "structured")
+            games = re.findall(r'class="game_link"[^>]*href="([^"]+)"', html, re.I)
+            if games:
+                prof.set_field("post_count", {"games": len(set(games))}, "structured")
+                prof.set_field("links", list(dict.fromkeys(games))[:6], "structured")
     except Exception:
         pass
     return prof

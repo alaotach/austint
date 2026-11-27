@@ -1007,9 +1007,17 @@ async def analyze_profile_hit(hit: Hit, client: httpx.AsyncClient) -> dict[str, 
         if len(path_parts) >= 2 and path_parts[1] not in ("orgs", "topics", "stars", "followers", "following"):
             info = await _analyze_github_repo(path_parts[0], path_parts[1], client)
         elif username:
-            info = await _analyze_github(username, client)
+            from osint_agent.collectors.extractors import EXTRACTOR_REGISTRY
+
+            info = (await EXTRACTOR_REGISTRY["github"](url, username, client)).to_metadata_dict()
+            if not info.get("name") and not info.get("bio"):
+                info = await _analyze_github(username, client)
     elif "wattpad.com" in host and username:
-        info = await _analyze_wattpad(username, client)
+        from osint_agent.collectors.extractors import EXTRACTOR_REGISTRY
+
+        info = (await EXTRACTOR_REGISTRY["wattpad"](url, username, client)).to_metadata_dict()
+        if not info.get("name") and not info.get("bio"):
+            info = await _analyze_wattpad(username, client)
     elif "play.google.com" in host:
         info = await _analyze_playstore(url, client)
     elif "reddit.com" in host and username:
@@ -1019,9 +1027,28 @@ async def analyze_profile_hit(hit: Hit, client: httpx.AsyncClient) -> dict[str, 
     elif ("mastodon." in host or "fosstodon." in host or "/@" in url) and "medium.com" not in host and "youtube.com" not in host and username:
         info = await _analyze_mastodon(url, username, client)
     elif "dev.to" in host and username:
-        info = await _analyze_devto(username, client)
+        from osint_agent.collectors.extractors import EXTRACTOR_REGISTRY
+
+        info = (await EXTRACTOR_REGISTRY["devto"](url, username, client)).to_metadata_dict()
+        if not info.get("name") and not info.get("bio"):
+            info = await _analyze_devto(username, client)
     elif "huggingface.co" in host and username:
-        info = await _analyze_huggingface(username, client)
+        from osint_agent.collectors.extractors import EXTRACTOR_REGISTRY
+
+        info = (await EXTRACTOR_REGISTRY["huggingface"](url, username, client)).to_metadata_dict()
+        if not info.get("name") and not info.get("bio"):
+            info = await _analyze_huggingface(username, client)
+    elif "kaggle.com" in host and username:
+        from osint_agent.collectors.extractors import EXTRACTOR_REGISTRY
+
+        info = (await EXTRACTOR_REGISTRY["kaggle"](url, username, client)).to_metadata_dict()
+    elif "itch.io" in host:
+        from osint_agent.collectors.extractors import EXTRACTOR_REGISTRY
+
+        sub_u = host.split(".")[0] if host.endswith(".itch.io") else username
+        info = (await EXTRACTOR_REGISTRY["itchio"](url, sub_u, client)).to_metadata_dict()
+    elif "pinterest." in host:
+        info = {"limited_public_data": True, "status_note": "exists, limited public data"}
     elif "t.me" in host:
         from osint_agent.collectors.extractors import EXTRACTOR_REGISTRY
 

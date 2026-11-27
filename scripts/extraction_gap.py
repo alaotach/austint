@@ -39,6 +39,31 @@ SIGNAL_PATTERNS = {
 }
 
 
+REAL_PROFILE_FIELDS = {
+    "name",
+    "bio",
+    "avatar_url",
+    "banner_url",
+    "location",
+    "country",
+    "joined",
+    "activity_dates",
+    "followers",
+    "following",
+    "post_count",
+    "total_views",
+    "stories",
+    "repos",
+    "packages",
+    "linked_urls",
+    "verified",
+    "orgs",
+    "languages",
+    "ratings",
+    "company",
+}
+
+
 def detect_raw_signals(body: str) -> list[str]:
     return [name for name, pat in SIGNAL_PATTERNS.items() if pat.search(body or "")]
 
@@ -59,7 +84,18 @@ async def diagnose_urls(urls: list[str], raw_dir: Path, client: httpx.AsyncClien
 
             allowed = await can_fetch_robots(client, parsed)
             if not allowed:
-                rows.append({"platform": platform, "url": url, "status": "blocked_robots_txt", "extracted": [], "raw_signals": []})
+                is_lw = any(d in host for d in ("pinterest.", "instagram.", "x.com", "twitter.", "facebook.", "linkedin."))
+                rows.append(
+                    {
+                        "platform": platform,
+                        "url": url,
+                        "status": "blocked_robots_txt",
+                        "extracted_fields": [],
+                        "raw_signals": [],
+                        "limited_public_data": is_lw,
+                        "status_note": "exists, limited public data" if is_lw else "blocked_robots_txt",
+                    }
+                )
                 continue
 
             status_code = 0
@@ -90,7 +126,11 @@ async def diagnose_urls(urls: list[str], raw_dir: Path, client: httpx.AsyncClien
                 metadata={"url": url},
             )
             await analyze_profile_hit(hit, client)
-            extracted = sorted(k for k, v in hit.metadata.items() if k != "url" and v not in (None, "", [], {}))
+            extracted = sorted(
+                k
+                for k, v in hit.metadata.items()
+                if k in REAL_PROFILE_FIELDS and v not in (None, "", [], {})
+            )
             raw_signals = detect_raw_signals(body)
             rows.append(
                 {

@@ -161,3 +161,133 @@ def test_ml_text_fallback_and_normalized_profile_schema():
     assert prof.field_sources["joined_at"] == "ml"
     assert prof.field_confidence["joined_at"] == 0.45
     assert isinstance(prof, NormalizedProfile)
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_newly_added_platform_extractors_github_devto_hf_wattpad_kaggle_itchio_youtube(monkeypatch):
+    monkeypatch.setenv("YOUTUBE_API_KEY", "test-yt-key")
+    monkeypatch.setattr("osint_agent.llm.client._load_dotenv", lambda *a, **kw: None)
+
+    respx.get("https://api.github.com/users/alaotach").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "login": "alaotach",
+                "name": "Aryan",
+                "bio": "ML & Systems",
+                "location": "Bengaluru",
+                "created_at": "2022-01-01T00:00:00Z",
+                "updated_at": "2026-10-01T00:00:00Z",
+                "followers": 100,
+                "following": 25,
+                "public_repos": 30,
+                "avatar_url": "https://avatars.githubusercontent.com/u/1",
+            },
+        )
+    )
+    respx.get("https://api.github.com/users/alaotach/repos").mock(
+        return_value=httpx.Response(200, json=[{"language": "Python"}, {"language": "Rust"}])
+    )
+    respx.get("https://api.github.com/users/alaotach/orgs").mock(
+        return_value=httpx.Response(200, json=[{"login": "open-osint"}])
+    )
+    respx.get("https://api.github.com/users/alaotach/social_accounts").mock(
+        return_value=httpx.Response(200, json=[])
+    )
+    respx.get("https://dev.to/api/users/by_username").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "username": "alaotach",
+                "name": "Aryan",
+                "summary": "Dev notes",
+                "location": "India",
+                "joined_at": "Jan 10, 2023",
+                "profile_image": "https://dev.to/img.png",
+            },
+        )
+    )
+    respx.get("https://huggingface.co/api/users/alaotach/overview").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "user": "alaotach",
+                "fullname": "Aryan",
+                "details": "HF builder",
+                "avatarUrl": "https://hf.co/a.png",
+                "numFollowers": 14,
+                "numModels": 3,
+                "numDatasets": 1,
+                "numSpaces": 2,
+            },
+        )
+    )
+    respx.get("https://www.wattpad.com/api/v3/users/alaotach").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "username": "alaotach",
+                "name": "Aryan",
+                "description": "Stories",
+                "avatar": "https://wattpad.com/a.jpg",
+                "numFollowers": 20,
+                "numFollowing": 5,
+                "numStoriesPublished": 3,
+                "createDate": "2021-05-05T00:00:00Z",
+                "location": "IN",
+            },
+        )
+    )
+    respx.get("https://www.wattpad.com/api/v3/users/alaotach/stories").mock(
+        return_value=httpx.Response(200, json={"stories": [{"title": "Story 1"}]})
+    )
+    respx.get("https://www.kaggle.com/alaotach").mock(
+        return_value=httpx.Response(
+            200,
+            text='<meta property="og:title" content="Aryan | Kaggle"><script>Kaggle.State.push({"displayName":"Aryan","bio":"Competitions","city":"Bengaluru","followersCount":9,"userJoinDate":"2022-03-01"})</script>',
+        )
+    )
+    respx.get("https://alaotach.itch.io").mock(
+        return_value=httpx.Response(
+            200,
+            text='<meta property="og:title" content="alaotach"><meta property="og:description" content="Indie games"><a class="game_link" href="https://alaotach.itch.io/demo">Demo</a>',
+        )
+    )
+    respx.get("https://www.googleapis.com/youtube/v3/channels").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "items": [
+                    {
+                        "snippet": {
+                            "title": "alaotach",
+                            "description": "Channel",
+                            "country": "IN",
+                            "publishedAt": "2020-01-01T00:00:00Z",
+                            "thumbnails": {"high": {"url": "https://yt.ggpht.com/a.jpg"}},
+                        },
+                        "statistics": {"subscriberCount": "500", "videoCount": "12", "viewCount": "9000"},
+                        "brandingSettings": {"image": {"bannerExternalUrl": "https://yt.ggpht.com/b.jpg"}},
+                    }
+                ]
+            },
+        )
+    )
+
+    async with httpx.AsyncClient() as client:
+        gh = await EXTRACTOR_REGISTRY["github"]("https://github.com/alaotach", "alaotach", client)
+        dv = await EXTRACTOR_REGISTRY["devto"]("https://dev.to/alaotach", "alaotach", client)
+        hf = await EXTRACTOR_REGISTRY["huggingface"]("https://huggingface.co/alaotach", "alaotach", client)
+        wp = await EXTRACTOR_REGISTRY["wattpad"]("https://www.wattpad.com/user/alaotach", "alaotach", client)
+        kg = await EXTRACTOR_REGISTRY["kaggle"]("https://www.kaggle.com/alaotach", "alaotach", client)
+        it = await EXTRACTOR_REGISTRY["itchio"]("https://alaotach.itch.io", "alaotach", client)
+        yt = await EXTRACTOR_REGISTRY["youtube"]("https://www.youtube.com/@alaotach", "alaotach", client)
+
+    assert gh.post_count == {"repos": 30} and gh.extra["orgs"] == ["open-osint"] and "Python" in gh.extra["languages"]
+    assert dv.bio == "Dev notes" and dv.joined_at == "Jan 10, 2023"
+    assert hf.post_count["models"] == 3 and hf.followers == 14
+    assert wp.post_count == {"stories": 3} and wp.joined_at == "2021-05-05"
+    assert kg.followers == 9 and kg.joined_at == "2022-03-01"
+    assert it.post_count == {"games": 1}
+    assert yt.followers == 500 and yt.post_count == {"videos": 12} and yt.total_views == 9000
