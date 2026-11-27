@@ -119,8 +119,8 @@ def main() -> int:
         print(json.dumps({"status": "missing_ground_truth", "expected_path": str(gt_path)}, indent=2))
         return 0
 
-    _, urls = load_ground_truth(gt_path)
-    rows = asyncio.run(diagnose_urls(urls, Path(args.raw_dir)))
+    _, urls, login_walled = load_ground_truth(gt_path)
+    rows = asyncio.run(diagnose_urls(urls + login_walled, Path(args.raw_dir)))
     print(json.dumps({"count": len(rows), "diagnostics": rows}, indent=2))
     return 0
 

@@ -1023,14 +1023,69 @@ async def analyze_profile_hit(hit: Hit, client: httpx.AsyncClient) -> dict[str, 
     elif "huggingface.co" in host and username:
         info = await _analyze_huggingface(username, client)
     elif "t.me" in host:
-        info = await _analyze_telegram(url, client)
+        from osint_agent.collectors.extractors import EXTRACTOR_REGISTRY
+
+        prof = await EXTRACTOR_REGISTRY["telegram"](url, username, client)
+        info = prof.to_metadata_dict()
+        if not info.get("name") and not info.get("bio"):
+            info = await _analyze_telegram(url, client)
+    elif "hub.docker.com" in host and username:
+        from osint_agent.collectors.extractors import EXTRACTOR_REGISTRY
+
+        info = (await EXTRACTOR_REGISTRY["dockerhub"](url, username, client)).to_metadata_dict()
+    elif "soundcloud.com" in host and username:
+        from osint_agent.collectors.extractors import EXTRACTOR_REGISTRY
+
+        info = (await EXTRACTOR_REGISTRY["soundcloud"](url, username, client)).to_metadata_dict()
+    elif ("youtube.com" in host or "youtu.be" in host) and username:
+        from osint_agent.collectors.extractors import EXTRACTOR_REGISTRY
+
+        info = (await EXTRACTOR_REGISTRY["youtube"](url, username, client)).to_metadata_dict()
+    elif "chess.com" in host and username:
+        from osint_agent.collectors.extractors import EXTRACTOR_REGISTRY
+
+        info = (await EXTRACTOR_REGISTRY["chess"](url, username, client)).to_metadata_dict()
+    elif "codeforces.com" in host and username:
+        from osint_agent.collectors.extractors import EXTRACTOR_REGISTRY
+
+        info = (await EXTRACTOR_REGISTRY["codeforces"](url, username, client)).to_metadata_dict()
+    elif "npmjs.com" in host and username:
+        from osint_agent.collectors.extractors import EXTRACTOR_REGISTRY
+
+        info = (await EXTRACTOR_REGISTRY["npm"](url, username, client)).to_metadata_dict()
+    elif "pypi.org" in host and username:
+        from osint_agent.collectors.extractors import EXTRACTOR_REGISTRY
+
+        info = (await EXTRACTOR_REGISTRY["pypi"](url, username, client)).to_metadata_dict()
+    elif "steamcommunity.com" in host and username:
+        from osint_agent.collectors.extractors import EXTRACTOR_REGISTRY
+
+        info = (await EXTRACTOR_REGISTRY["steam"](url, username, client)).to_metadata_dict()
+    elif "medium.com" in host and username:
+        from osint_agent.collectors.extractors import EXTRACTOR_REGISTRY
+
+        info = (await EXTRACTOR_REGISTRY["medium"](url, username, client)).to_metadata_dict()
     elif "instagram.com" in host and username:
         info = await _analyze_instagram(url, username, client)
     elif any(d in host for d in ("x.com", "twitter.com", "facebook.com", "linkedin.com")):
         info = await _analyze_login_walled_og_only(url, client)
 
-    if not info:
-        info = await _analyze_generic_html(url, client)
+    if not info or (not info.get("bio") and not info.get("name") and not info.get("limited_public_data")):
+        generic = await _analyze_generic_html(url, client)
+        if generic:
+            for k, v in generic.items():
+                if not info.get(k):
+                    info[k] = v
+
+    if info.get("page_text_excerpt") and (not info.get("joined") or not info.get("location") or info.get("followers") is None):
+        from osint_agent.collectors.extractors import ml_text_fallback_extract
+
+        ml_prof = ml_text_fallback_extract(info["page_text_excerpt"], url).to_metadata_dict()
+        for k in ("joined", "location", "followers", "bio"):
+            if not info.get(k) and ml_prof.get(k):
+                info[k] = ml_prof[k]
+                info.setdefault("field_sources", {})[k] = "ml"
+                info.setdefault("field_confidence", {})[k] = 0.45
 
     if not info:
         return {}
@@ -1040,7 +1095,22 @@ async def analyze_profile_hit(hit: Hit, client: httpx.AsyncClient) -> dict[str, 
     if info.get("limited_public_data"):
         hit.metadata["limited_public_data"] = True
         hit.metadata["status_note"] = info.get("status_note", "exists, limited public data")
-    for extra_k in ("followers", "joined", "activity_dates", "banner_url", "languages", "orgs", "pinned_repos"):
+    for extra_k in (
+        "followers",
+        "following",
+        "joined",
+        "activity_dates",
+        "banner_url",
+        "country",
+        "post_count",
+        "total_views",
+        "verified",
+        "field_sources",
+        "field_confidence",
+        "languages",
+        "orgs",
+        "pinned_repos",
+    ):
         if info.get(extra_k) is not None:
             hit.metadata[extra_k] = info[extra_k]
     if info.get("name"):

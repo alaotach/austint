@@ -30,7 +30,7 @@ def _norm_url(url: str) -> str:
     return s
 
 
-def load_ground_truth(path: Path) -> tuple[str, list[str]]:
+def load_ground_truth(path: Path) -> tuple[str, list[str], list[str]]:
     data = json.loads(path.read_text(encoding="utf-8"))
     if isinstance(data, list):
         urls = [str(u) for u in data if str(u).strip()]
@@ -40,8 +40,12 @@ def load_ground_truth(path: Path) -> tuple[str, list[str]]:
             if parts:
                 handle = parts[-1].lstrip("@")
                 break
-        return handle, urls
-    return str(data.get("handle") or ""), [str(u) for u in (data.get("urls") or []) if str(u).strip()]
+        return handle, urls, []
+    return (
+        str(data.get("handle") or ""),
+        [str(u) for u in (data.get("urls") or []) if str(u).strip()],
+        [str(u) for u in (data.get("login_walled") or []) if str(u).strip()],
+    )
 
 
 def evaluate_recall_against_graph(
@@ -90,7 +94,7 @@ def evaluate_recall_against_graph(
 
 
 async def _run(gt_path: Path, handle_override: str, max_depth: int, max_calls: int) -> dict[str, Any]:
-    handle, urls = load_ground_truth(gt_path)
+    handle, urls, login_walled = load_ground_truth(gt_path)
     target_handle = handle_override or handle
     if not target_handle:
         raise ValueError("Could not determine handle from ground truth file; pass --handle.")
@@ -116,6 +120,11 @@ async def _run(gt_path: Path, handle_override: str, max_depth: int, max_calls: i
         if line.strip()
     ] if audit_path.exists() else []
     res = evaluate_recall_against_graph(urls, disc_urls, events)
+    if login_walled:
+        lw_res = evaluate_recall_against_graph(login_walled, disc_urls, events)
+        res["login_walled_recall"] = lw_res["recall"]
+        res["login_walled_matched"] = lw_res["matched_count"]
+        res["login_walled_total"] = lw_res["ground_truth_count"]
     res["handle"] = target_handle
     return res
 

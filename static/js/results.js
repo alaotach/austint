@@ -94,10 +94,15 @@
 
     if (d.type === "profile") {
       add("name", attrs.name || attrs.display_name);
-      add("location", attrs.location);
+      add("location", attrs.location || attrs.country);
       add("joined", attrs.joined || attrs.created_at);
       add("active", attrs.activity_dates || attrs.updated_at);
       add("followers", attrs.followers);
+      if (attrs.post_count && typeof attrs.post_count === "object") {
+        const cnts = Object.entries(attrs.post_count).map(([k, v]) => `${k}:${v}`).join(", ");
+        add("counts", cnts);
+      }
+      if (attrs.total_views != null) add("views", attrs.total_views);
       add("languages", attrs.languages);
       add("orgs", attrs.orgs);
     } else if (d.type === "domain") {
