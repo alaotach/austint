@@ -56,9 +56,16 @@ _HANDLE_CUE_RE = re.compile(
 )
 
 
+def _deobfuscate_contact_text(text: str) -> str:
+    """Normalize common academic/web email obfuscations like user[at]domain[dot]com."""
+    out = re.sub(r"\s*[\[\(\{]\s*at\s*[\]\)\}]\s*", "@", text, flags=re.IGNORECASE)
+    out = re.sub(r"\s*[\[\(\{]\s*dot\s*[\]\)\}]\s*", ".", out, flags=re.IGNORECASE)
+    return out
+
+
 def _fallback_parse_seeds(clean_text: str) -> list[Entity]:
     """Deterministic seed extraction fallback for emails, domains, URLs, usernames, and names."""
-    entities = extract_entities(clean_text)
+    entities = extract_entities(_deobfuscate_contact_text(clean_text))
     seen = {e.id for e in entities}
 
     # 1. Explicit profile URLs (e.g. https://github.com/alaotach, https://play.google.com/...)

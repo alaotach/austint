@@ -209,10 +209,10 @@
             body: JSON.stringify({ text }),
           });
           const data = await r.json();
-          parsedSeeds = data.seeds || [];
+          parsedSeeds = data.entities || data.seeds || [];
           statusEl.textContent = `Extracted ${parsedSeeds.length} seed(s)`;
           prevEl.innerHTML = parsedSeeds
-            .map((s) => `<span class="chip badge-accent">${esc(s.kind)}: ${esc(s.value)}</span>`)
+            .map((s) => `<span class="chip badge-accent">${esc(s.type || s.kind)}: ${esc(s.value)}</span>`)
             .join("");
         } catch (err) {
           statusEl.textContent = `Error: ${err.message}`;
