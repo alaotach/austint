@@ -85,58 +85,66 @@
   function renderEntityFields(d) {
     const attrs = d.attributes || {};
     const rows = [];
-    const add = (label, val) => {
-      if (val !== undefined && val !== null && val !== "" && (!Array.isArray(val) || val.length > 0)) {
-        const text = Array.isArray(val) ? val.slice(0, 3).join(", ") : String(val);
-        rows.push(`<div class="mono" style="font-size:11px; display:flex; justify-content:space-between; gap:8px;"><span style="color:var(--text-muted);">${esc(label)}</span><span style="text-align:right; overflow:hidden; text-overflow:ellipsis; max-width:68%;">${esc(text)}</span></div>`);
+    const seenKeys = new Set();
+    const skipKeys = new Set([
+      "url", "website", "title", "site", "bio", "description",
+      "avatar", "avatar_url", "banner", "banner_url", "images",
+      "source_tool", "resolver_features", "hand_features",
+      "field_sources", "field_confidence", "ml_keywords", "ml_summary",
+      "limited_public_data", "status_note", "extra_fields",
+      "phone", "phones", "breach", "stealer_family",
+    ]);
+
+    const formatVal = (val) => {
+      if (val === undefined || val === null || val === "") return "";
+      if (Array.isArray(val)) {
+        if (!val.length) return "";
+        return val.map((v) => (typeof v === "object" && v !== null ? JSON.stringify(v) : String(v))).join(", ");
+      }
+      if (typeof val === "object") {
+        const entries = Object.entries(val).filter(([, v]) => v !== undefined && v !== null && v !== "");
+        if (!entries.length) return "";
+        return entries.map(([k, v]) => `${k}: ${Array.isArray(v) ? v.join(", ") : v}`).join(" · ");
+      }
+      if (typeof val === "boolean") return val ? "yes" : "no";
+      return String(val);
+    };
+
+    const add = (rawKey, val) => {
+      const normKey = String(rawKey).toLowerCase();
+      if (skipKeys.has(normKey) || seenKeys.has(normKey)) return;
+      const text = formatVal(val).trim();
+      if (!text) return;
+      seenKeys.add(normKey);
+      const label = normKey.replace(/_/g, " ");
+      if (text.length > 260) {
+        rows.push(`
+          <details class="mono" style="font-size:11px; margin-top:2px;" onclick="event.stopPropagation();">
+            <summary style="cursor:pointer; color:var(--text-muted);">${esc(label)} <span style="color:var(--accent);">(${text.length} chars)</span></summary>
+            <div style="margin-top:4px; padding:6px; border-radius:4px; background:var(--bg-elevated); white-space:pre-wrap; word-break:break-word; max-height:180px; overflow:auto;">${esc(text)}</div>
+          </details>
+        `);
+      } else {
+        rows.push(`<div class="mono" style="font-size:11px; display:flex; justify-content:space-between; gap:8px; align-items:flex-start;"><span style="color:var(--text-muted); flex-shrink:0;">${esc(label)}</span><span style="text-align:right; word-break:break-word; max-width:72%;">${esc(text)}</span></div>`);
       }
     };
 
-    if (d.type === "profile") {
-      const ef = attrs.extra_fields || {};
-      add("name", attrs.name || attrs.display_name);
-      add("role", attrs.job_title || attrs.headline || ef.headline);
-      add("orgs", attrs.organizations || attrs.orgs || attrs.company);
-      add("location", attrs.location || attrs.country);
-      add("dob", attrs.dob || ef.dob);
-      add("research", attrs.current_research_area || ef.current_research_area);
-      add("education", attrs.education || ef.education);
-      add("experience", attrs.experience || ef.experience);
-      add("guide", attrs.guide_name || ef.guide_name);
-      add("skills", attrs.skills);
-      add("emails", attrs.contact_emails || attrs.email);
-      add("projects", attrs.projects_or_stories);
-      add("joined", attrs.joined || attrs.created_at);
-      add("active", attrs.activity_dates || attrs.updated_at);
-      add("followers", attrs.followers);
-      if (attrs.post_count && typeof attrs.post_count === "object") {
-        const cnts = Object.entries(attrs.post_count).map(([k, v]) => `${k}:${v}`).join(", ");
-        add("counts", cnts);
-      }
-      if (attrs.total_views != null) add("views", attrs.total_views);
-      add("languages", attrs.languages);
-      const shownExtra = new Set(["dob", "guide_name", "current_research_area", "education", "experience", "headline", "document_type"]);
-      Object.entries(ef).forEach(([k, v]) => {
-        if (!shownExtra.has(k) && k !== "contacts_listed") add(k.replace(/_/g, " "), v);
-      });
-      add("summary", attrs.llm_summary);
-    } else if (d.type === "domain") {
-      add("registrar", attrs.registrar);
-      add("ip", attrs.ip);
-      add("created", attrs.created);
-      add("subdomains", attrs.subdomains);
-    } else if (d.type === "email") {
-      add("username", attrs.username);
-      add("name", attrs.name);
-      add("pgp", attrs.pgp_key ? "present" : "");
-    } else if (d.type === "place") {
-      add("lat/lon", attrs.lat != null && attrs.lon != null ? `${attrs.lat}, ${attrs.lon}` : "");
-      add("country", attrs.country);
-    } else {
-      add("site", attrs.site);
-      add("summary", attrs.bio || attrs.description || attrs.summary);
-      add("date", attrs.date || attrs.published_date);
-    }
+    // Priority order for common high-signal fields, then dynamically render EVERYTHING else
+    const priorityOrder = [
+      "name", "display_name", "username", "job_title", "headline",
+      "organizations", "orgs", "company", "location", "country",
+      "dob", "email", "contact_emails", "current_research_area",
+      "education", "experience", "guide_name", "skills",
+      "projects_or_stories", "languages", "followers", "post_count",
+      "total_views", "joined", "created_at", "activity_dates", "updated_at",
+      "registrar", "ip", "created", "subdomains", "llm_summary",
+    ];
+    const ef = (attrs.extra_fields && typeof attrs.extra_fields === "object") ? attrs.extra_fields : {};
+    const merged = { ...attrs, ...ef };
+    priorityOrder.forEach((k) => {
+      if (k in merged) add(k, merged[k]);
+    });
+    Object.entries(merged).forEach(([k, v]) => add(k, v));
 
     // Sensitive fields gated behind explicit reveal
     const hasSensitive = Boolean(attrs.phone || attrs.phones || attrs.breach || attrs.stealer_family);
