@@ -235,7 +235,9 @@ def evaluate_by_negative_type(
 
 
 def select_live_llm_provider() -> str | None:
-    """Select live LLM provider in order: gemini -> anthropic -> openrouter (if key set)."""
+    """Select live LLM provider (explicit g4f, or gemini -> anthropic -> openrouter)."""
+    if os.getenv("LLM_PROVIDER", "").lower() == "g4f":
+        return "g4f"
     if os.getenv("GEMINI_API_KEY"):
         return "gemini"
     if os.getenv("ANTHROPIC_API_KEY"):
@@ -286,8 +288,12 @@ def run_llm_judge_two_variants(
     max_calls_per_variant: int = 400,
     max_consecutive_rate_limits: int = 3,
     base_backoff_sec: float = 1.0,
+    concurrency: int = 1,
 ) -> dict[str, Any]:
     """Evaluate 2 prompt variants (`minimal`, `field_by_field`) with disk cache + backoff."""
+    import concurrent.futures
+    import threading
+
     if client is None:
         provider_name = provider_name or select_live_llm_provider()
         if not provider_name:
@@ -303,6 +309,39 @@ def run_llm_judge_two_variants(
     cache_dir.mkdir(parents=True, exist_ok=True)
     variants_out: dict[str, Any] = {}
     y_true = np.array([int(r["label"]) for r in rows], dtype=int)
+    lock = threading.Lock()
+
+    def _eval_one(r: dict[str, Any], variant: str) -> dict[str, Any] | None:
+        sys_p, usr_p = _build_judge_prompt(r, variant)
+        t0 = time.perf_counter()
+        ok = False
+        prob = 0.5
+        tokens = 0
+        cost = 0.0
+        for attempt in range(3):
+            try:
+                raw = client.complete_json(sys_p, usr_p)
+                if isinstance(raw, dict) and "match_probability" in raw and not raw.get("_rate_limited"):
+                    prob = float(np.clip(float(raw["match_probability"]), 0.0, 1.0))
+                    tokens = int(raw.get("_token_usage") or getattr(client, "last_tokens", 0) or (len(usr_p) // 4 + 32))
+                    cost = 0.0 if (provider_name == "g4f") else round(tokens * 0.0000005, 6)
+                    ok = True
+                    break
+            except Exception:
+                pass
+            time.sleep(base_backoff_sec * (2**attempt))
+        if not ok:
+            return None
+        lat_ms = (time.perf_counter() - t0) * 1000.0
+        return {
+            "pair_id": str(r.get("pair_id") or ""),
+            "variant": variant,
+            "match_probability": prob,
+            "tokens": tokens,
+            "cost_usd": cost,
+            "latency_ms": round(lat_ms, 3),
+            "live_ok": True,
+        }
 
     for variant in ("minimal", "field_by_field"):
         cache_path = cache_dir / f"llm_judge_{variant}.jsonl"
@@ -315,67 +354,41 @@ def run_llm_judge_two_variants(
                 if rec.get("live_ok"):
                     cached[str(rec["pair_id"])] = rec
 
-        probs: list[float] = []
-        latencies: list[float] = []
-        total_tokens = 0
-        total_cost = 0.0
         consec_rl = 0
         rate_limited = False
+        pending = [r for r in rows if str(r.get("pair_id") or "") not in cached]
 
-        for r in rows:
-            pid = str(r.get("pair_id") or "")
-            if pid in cached:
-                rec = cached[pid]
-                probs.append(float(rec["match_probability"]))
-                latencies.append(float(rec.get("latency_ms", 0.0)))
-                total_tokens += int(rec.get("tokens", 0))
-                total_cost += float(rec.get("cost_usd", 0.0))
-                continue
-
-            sys_p, usr_p = _build_judge_prompt(r, variant)
-            t0 = time.perf_counter()
-            ok = False
-            prob = 0.5
-            tokens = 0
-            cost = 0.0
-            for attempt in range(2):
-                try:
-                    raw = client.complete_json(sys_p, usr_p)
-                    if isinstance(raw, dict) and "match_probability" in raw and not raw.get("_rate_limited"):
-                        prob = float(np.clip(float(raw["match_probability"]), 0.0, 1.0))
-                        tokens = int(getattr(client, "last_tokens", len(usr_p) // 4 + 32))
-                        cost = round(tokens * 0.0000005, 6)
-                        ok = True
+        if concurrency > 1 and pending:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=concurrency) as pool:
+                futs = {pool.submit(_eval_one, r, variant): r for r in pending}
+                for fut in concurrent.futures.as_completed(futs):
+                    rec = fut.result()
+                    if rec is not None:
                         consec_rl = 0
-                        break
+                        with lock:
+                            cached[rec["pair_id"]] = rec
+                            with open(cache_path, "a", encoding="utf-8") as cf:
+                                cf.write(json.dumps(rec) + "\n")
                     else:
                         consec_rl += 1
-                        time.sleep(base_backoff_sec * (2**attempt))
-                except Exception:
+        else:
+            for r in pending:
+                rec = _eval_one(r, variant)
+                if rec is not None:
+                    consec_rl = 0
+                    cached[rec["pair_id"]] = rec
+                    with open(cache_path, "a", encoding="utf-8") as cf:
+                        cf.write(json.dumps(rec) + "\n")
+                else:
                     consec_rl += 1
-                    time.sleep(base_backoff_sec * (2**attempt))
+                    if consec_rl >= max_consecutive_rate_limits:
+                        rate_limited = True
+                        break
 
-            lat_ms = (time.perf_counter() - t0) * 1000.0
-            if ok:
-                rec = {
-                    "pair_id": pid,
-                    "variant": variant,
-                    "match_probability": prob,
-                    "tokens": tokens,
-                    "cost_usd": cost,
-                    "latency_ms": round(lat_ms, 3),
-                    "live_ok": True,
-                }
-                with open(cache_path, "a", encoding="utf-8") as cf:
-                    cf.write(json.dumps(rec) + "\n")
-                probs.append(prob)
-                latencies.append(lat_ms)
-                total_tokens += tokens
-                total_cost += cost
-            else:
-                if consec_rl >= max_consecutive_rate_limits:
-                    rate_limited = True
-                    break
+        probs = [float(cached[str(r.get("pair_id") or "")]["match_probability"]) for r in rows if str(r.get("pair_id") or "") in cached]
+        latencies = [float(cached[str(r.get("pair_id") or "")].get("latency_ms", 0.0)) for r in rows if str(r.get("pair_id") or "") in cached]
+        total_tokens = sum(int(cached[str(r.get("pair_id") or "")].get("tokens", 0)) for r in rows if str(r.get("pair_id") or "") in cached)
+        total_cost = sum(float(cached[str(r.get("pair_id") or "")].get("cost_usd", 0.0)) for r in rows if str(r.get("pair_id") or "") in cached)
 
         if rate_limited or len(probs) < len(rows):
             variants_out[variant] = {

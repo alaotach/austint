@@ -121,3 +121,14 @@ def test_tune_threshold_on_val_and_llm_judge_two_variants_offline(tmp_path: Path
     assert res["variants"]["minimal"]["status"] == "ok"
     assert res["variants"]["field_by_field"]["status"] == "ok"
     assert (tmp_path / "llm_cache" / "llm_judge_minimal.jsonl").exists()
+
+
+
+def test_select_live_llm_provider_g4f(monkeypatch):
+    from osint_agent.llm.client import G4FClient, get_llm_client
+    from osint_agent.ml.validation import select_live_llm_provider
+
+    monkeypatch.setenv("LLM_PROVIDER", "g4f")
+    assert select_live_llm_provider() == "g4f"
+    cli = get_llm_client("g4f", call_budget=5)
+    assert isinstance(cli, G4FClient)

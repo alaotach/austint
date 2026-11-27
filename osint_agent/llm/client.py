@@ -502,12 +502,62 @@ class OpenRouterClient(BaseClient):
         ) from last_exc
 
 
+class G4FClient(BaseClient):
+    """Local gpt4free client targeting a specific non-captcha HTTP provider (default: Yqcloud)."""
+
+    def __init__(
+        self,
+        provider_name: str | None = None,
+        model: str | None = None,
+        call_budget: int = 20,
+        timeout: float = 45.0,
+    ) -> None:
+        super().__init__(call_budget=call_budget, timeout=timeout)
+        _load_dotenv()
+        self.provider_name = provider_name or os.getenv("G4F_PROVIDER", "Yqcloud")
+        self.model = model or os.getenv("G4F_MODEL", "")
+
+    def complete_json(self, system: str, user: str, max_tokens: int = 1000) -> dict[str, Any]:
+        import g4f
+        from g4f.client import Client
+
+        self._check_budget()
+        prov = getattr(g4f.Provider, self.provider_name, None)
+        if prov is None:
+            raise ValueError(f"Unknown g4f provider: {self.provider_name}")
+        model_name = self.model or getattr(prov, "default_model", "") or "gpt-4"
+        g4f_client = Client(provider=prov)
+        resp = g4f_client.chat.completions.create(
+            model=model_name,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+        )
+        raw_text = str((resp.choices[0].message.content if resp.choices else "") or "")
+        usage = getattr(resp, "usage", None)
+        token_count = int(getattr(usage, "total_tokens", 0) or 0) if usage else 0
+        if token_count <= 0:
+            token_count = max(1, (len(system) + len(user) + len(raw_text)) // 4)
+        self.last_tokens = token_count
+        return self._parse_payload(raw_text, token_count)
+
+
 def get_llm_client(provider: str | None = None, call_budget: int = 20) -> LLMClient:
     """Factory creating configured LLM client instance."""
     _load_dotenv()
     chosen = (provider or os.getenv("LLM_PROVIDER", "anthropic")).lower()
     if chosen in ("openrouter", "openai", "hackclub"):
         return OpenRouterClient(call_budget=call_budget)
+    if chosen == "g4f":
+        if os.getenv("G4F_BASE_URL"):
+            return OpenRouterClient(
+                api_key=os.getenv("G4F_API_KEY", "g4f"),
+                model=os.getenv("G4F_MODEL", "auto"),
+                base_url=os.environ["G4F_BASE_URL"],
+                call_budget=call_budget,
+            )
+        return G4FClient(call_budget=call_budget)
     if chosen == "anthropic":
         return AnthropicClient(call_budget=call_budget)
     if chosen == "gemini":
