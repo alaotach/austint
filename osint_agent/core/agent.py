@@ -261,6 +261,12 @@ class OSINTAgent:
                                 current_entity.confidence * scope.confidence_decay * score, 4
                             )
 
+                        safe_meta = {
+                            k: v
+                            for k, v in (hit.metadata or {}).items()
+                            if k not in {"phone", "phones", "phone_numbers", "breach", "stealer_family", "top_passwords", "page_text_excerpt"}
+                            and v not in (None, "", [], {})
+                        }
                         self.audit.log_event(
                             "hit_evaluated",
                             {
@@ -273,6 +279,7 @@ class OSINTAgent:
                                 "accepted": accepted,
                                 "child_confidence": child_confidence,
                                 "min_confidence": scope.min_confidence,
+                                "metadata": safe_meta,
                             },
                         )
 

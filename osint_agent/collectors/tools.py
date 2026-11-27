@@ -2393,19 +2393,90 @@ def reset_exa_state() -> None:
         "and page text for an email, username, person, org, or domain. Never retries on 402/429."
     ),
 )
+async def _duckduckgo_web_fallback(
+    entity: Entity,
+    client: httpx.AsyncClient,
+    query: str,
+) -> list[Hit]:
+    """Free keyless DuckDuckGo HTML search fallback when Exa API is unavailable or rate-limited."""
+    from html import unescape
+    from urllib.parse import parse_qs, quote_plus, unquote, urlparse
+
+    val = entity.value.strip()
+    queries = [query]
+    if entity.entity_type in (EntityType.USERNAME, EntityType.PUBLIC_FIGURE, EntityType.CONSENTING_PERSON):
+        queries.append(f'site:instagram.com "{val}"')
+
+    hits: list[Hit] = []
+    seen_urls: set[str] = set()
+    for q in queries:
+        try:
+            resp = await client.get(
+                f"https://html.duckduckgo.com/html/?q={quote_plus(q)}",
+                headers={"User-Agent": DEFAULT_USER_AGENT},
+                follow_redirects=True,
+                timeout=10.0,
+            )
+            if resp.status_code != 200:
+                continue
+            html = resp.text[:250_000]
+            blocks = []
+            for am in re.finditer(
+                r'<a[^>]*class="result__a"[^>]*href="([^"]+)"[^>]*>(.*?)</a>',
+                html,
+                re.DOTALL | re.IGNORECASE,
+            ):
+                tail = html[am.end() : am.end() + 800]
+                sm = re.search(r'<a[^>]*class="result__snippet"[^>]*>(.*?)</a>', tail, re.DOTALL | re.IGNORECASE)
+                blocks.append((am.group(1), am.group(2), sm.group(1) if sm else ""))
+            for raw_href, raw_title, raw_snip in blocks[:6]:
+                href = unescape(raw_href)
+                if "uddg=" in href:
+                    qs = parse_qs(urlparse(href).query)
+                    if qs.get("uddg"):
+                        href = unquote(qs["uddg"][0])
+                if not href.startswith(("http://", "https://")) or href in seen_urls:
+                    continue
+                seen_urls.add(href)
+                title = unescape(re.sub(r"<[^>]+>", " ", raw_title)).strip()
+                snippet = unescape(re.sub(r"<[^>]+>", " ", raw_snip or "")).strip()
+                site = urlparse(href).netloc.lower()
+                meta: dict[str, Any] = {
+                    "site": site,
+                    "url": href,
+                    "title": title,
+                    "bio": snippet[:400] if snippet else title,
+                }
+                if "instagram.com" in site:
+                    ig_m = re.match(r"^(.*?)\s*\(@([^)]+)\)", title)
+                    if ig_m:
+                        meta["name"] = ig_m.group(1).strip()
+                        meta["username"] = ig_m.group(2).strip()
+                    fol_m = re.search(r"([\d,.]+[KMB]?)\s+Followers", snippet, re.IGNORECASE)
+                    if fol_m:
+                        meta["followers"] = fol_m.group(1)
+                hits.append(
+                    Hit(
+                        target_entity_id=entity.id,
+                        discovered_type=EntityType.PROFILE,
+                        discovered_value=href,
+                        relation="web_mention",
+                        source_tool="exa_search",
+                        is_trusted=False,
+                        raw_data={"site": site, "url": href, "title": title, "description": snippet[:300]},
+                        metadata=meta,
+                    )
+                )
+        except Exception:
+            continue
+    return hits[:8]
+
+
 async def collect_exa_search(entity: Entity, client: httpx.AsyncClient) -> list[Hit]:
-    """Query Exa /search once for the entity and emit PROFILE hits with page text; fail fast on 402/429."""
+    """Query Exa /search once for the entity and emit PROFILE hits; falls back to DuckDuckGo HTML."""
     global _EXA_402_BLOCKED, _EXA_COOLDOWN_UNTIL
     import time
     from osint_agent.llm.client import _load_dotenv
-
-    if _EXA_402_BLOCKED or time.monotonic() < _EXA_COOLDOWN_UNTIL:
-        return []
-
-    _load_dotenv()
-    api_key = os.getenv("EXA_API_KEY") or os.getenv("OPENROUTER_API_KEY", "")
-    if not api_key:
-        return []
 
     val = entity.value.strip()
     if not val or len(val) < 2:
@@ -2415,6 +2486,11 @@ async def collect_exa_search(entity: Entity, client: httpx.AsyncClient) -> list[
         query = f'site:{val} OR "{val}"'
     else:
         query = f'"{val}"'
+
+    _load_dotenv()
+    api_key = os.getenv("EXA_API_KEY") or os.getenv("OPENROUTER_API_KEY", "")
+    if _EXA_402_BLOCKED or time.monotonic() < _EXA_COOLDOWN_UNTIL or not api_key:
+        return await _duckduckgo_web_fallback(entity, client, query)
 
     base_url = os.getenv("EXA_BASE_URL", "https://ai.hackclub.com/proxy/v1/exa").rstrip("/")
     search_url = f"{base_url}/search"
@@ -2435,21 +2511,21 @@ async def collect_exa_search(entity: Entity, client: httpx.AsyncClient) -> list[
             timeout=12.0,
         )
 
-        # NEVER retry on 402 (allowance/credits exhausted) — disable for session
+        # NEVER retry on 402 (allowance/credits exhausted) — disable for session & fallback
         if resp.status_code == 402:
             _EXA_402_BLOCKED = True
-            logger.warning("Exa returned 402 Payment Required — disabling Exa without retrying.")
-            return []
+            logger.warning("Exa returned 402 Payment Required — using DuckDuckGo web fallback.")
+            return await _duckduckgo_web_fallback(entity, client, query)
 
-        # NEVER retry on 429 — trip cooldown immediately
+        # NEVER retry on 429 — trip cooldown immediately & fallback
         if resp.status_code == 429:
             _EXA_COOLDOWN_UNTIL = time.monotonic() + 120.0
-            logger.warning("Exa returned 429 Too Many Requests — cooling down 120s without retrying.")
-            return []
+            logger.warning("Exa returned 429 Too Many Requests — using DuckDuckGo web fallback.")
+            return await _duckduckgo_web_fallback(entity, client, query)
 
         if resp.status_code != 200:
-            logger.debug("Exa search HTTP %d for %s", resp.status_code, val)
-            return []
+            logger.debug("Exa search HTTP %d for %s — using DuckDuckGo fallback", resp.status_code, val)
+            return await _duckduckgo_web_fallback(entity, client, query)
 
         data = resp.json()
         results = data.get("results") or []

@@ -275,6 +275,7 @@
 
     scanBudget = { maxTools: maxCalls, maxLlm: maxLlm, toolsUsed: 0, llmUsed: 0 };
     resetCollectorStatus();
+    window.OSINT_STATE.isRecordedRun = false;
     window.OSINT_STATE.nodes = [];
     window.OSINT_STATE.edges = [];
     window.OSINT_STATE.auditEvents = [];
@@ -344,6 +345,7 @@
         collectorStatus[d.tool].hits += hits;
         collectorStatus[d.tool].status = hits > 0 ? "found" : "not_found";
       }
+      if (st.jobId && !st.isRecordedRun) refreshGraph(st.jobId);
     } else if (type === "tool_call_error" && d.tool) {
       if (collectorStatus[d.tool]) {
         collectorStatus[d.tool].status = "error";
@@ -407,6 +409,7 @@
       const run = (data.runs || [])[0];
       if (!run) return;
       resetCollectorStatus();
+      window.OSINT_STATE.isRecordedRun = true;
       window.OSINT_STATE.jobId = run.file.replace("audit_", "").replace(".jsonl", "");
       window.OSINT_STATE.auditEvents = [];
       const nodesMap = {};
@@ -417,6 +420,7 @@
         if (ev.event === "hit_evaluated" && ev.details) {
           const d = ev.details;
           const id = `${d.discovered_type || "node"}:${d.discovered_value}`;
+          const meta = d.metadata || {};
           if (!nodesMap[id]) {
             nodesMap[id] = {
               data: {
@@ -426,7 +430,7 @@
                 confidence: Number(d.child_confidence ?? d.resolver_score ?? 0.5),
                 depth: 1,
                 provenance: [`${d.tool || "collector"}:discovered`],
-                attributes: { source_tool: d.tool || "", resolver_score: d.resolver_score },
+                attributes: { ...meta, source_tool: d.tool || "", resolver_score: d.resolver_score },
               },
             };
           }
@@ -440,6 +444,16 @@
               source_tool: d.tool || "unknown",
             },
           });
+        } else if (ev.event === "profile_discovered" && ev.details && ev.details.url) {
+          const pd = ev.details;
+          const id = `profile:${pd.url}`;
+          if (nodesMap[id]) {
+            Object.assign(nodesMap[id].data.attributes, {
+              site: pd.site || nodesMap[id].data.attributes.site,
+              url: pd.url,
+              username: pd.username || nodesMap[id].data.attributes.username,
+            });
+          }
         }
       });
       window.OSINT_STATE.nodes = Object.values(nodesMap);

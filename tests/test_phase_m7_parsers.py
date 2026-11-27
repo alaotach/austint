@@ -4,10 +4,15 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import httpx
+import pytest
+import respx
 from fastapi.testclient import TestClient
 
 from osint_agent.api.server import app, compute_field_coverage
-from osint_agent.collectors.profile_analyzer import parse_public_profile_html
+from osint_agent.collectors.profile_analyzer import _analyze_instagram, parse_public_profile_html
+from osint_agent.collectors.tools import collect_exa_search
+from osint_agent.core.schema import Entity, EntityType
 
 
 def test_parse_public_profile_html_fixture():
@@ -58,3 +63,35 @@ def test_compute_field_coverage_and_collectors_endpoint():
     assert resp.status_code == 200
     data = resp.json()
     assert data["count"] >= 14
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_exa_duckduckgo_fallback_and_instagram_extraction(monkeypatch):
+    monkeypatch.delenv("EXA_API_KEY", raising=False)
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+
+    ddg_html = """
+    <html><body>
+      <a class="result__a" href="https://www.instagram.com/alaotach/">Aryan (@alaotach) • Instagram photos and videos</a>
+      <a class="result__snippet" href="#">1,250 Followers, 300 Following, 12 Posts - Builder &amp; ML Researcher</a>
+    </body></html>
+    """
+    respx.post("https://ai.hackclub.com/proxy/v1/exa/search").mock(return_value=httpx.Response(429))
+    respx.get("https://html.duckduckgo.com/html/").mock(return_value=httpx.Response(200, text=ddg_html))
+
+    ent = Entity.create(entity_type=EntityType.USERNAME, value="alaotach")
+    async with httpx.AsyncClient() as client:
+        hits = await collect_exa_search(ent, client)
+
+    assert len(hits) >= 1
+    ig_hit = next(h for h in hits if "instagram.com/alaotach" in h.discovered_value)
+    assert ig_hit.metadata["name"] == "Aryan"
+    assert ig_hit.metadata["username"] == "alaotach"
+    assert ig_hit.metadata["followers"] == "1,250"
+
+    respx.get("https://www.instagram.com/alaotach/").mock(return_value=httpx.Response(429))
+    async with httpx.AsyncClient() as client:
+        ig_info = await _analyze_instagram("https://www.instagram.com/alaotach/", "alaotach", client)
+    assert ig_info["name"] == "Aryan"
+    assert ig_info["followers"] == "1,250"

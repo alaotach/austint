@@ -950,6 +950,69 @@ async def _analyze_generic_html(url: str, client: httpx.AsyncClient) -> dict[str
     return info
 
 
+async def _analyze_instagram(url: str, username: str, client: httpx.AsyncClient) -> dict[str, Any]:
+    """Extract public Instagram name, bio, and follower counts via public OG tags or DuckDuckGo snippet."""
+    from html import unescape
+    from urllib.parse import quote_plus
+
+    info: dict[str, Any] = {}
+    try:
+        resp = await client.get(url, headers=BROWSER_HEADERS, follow_redirects=True, timeout=6.0)
+        if resp.status_code == 200 and "text/html" in resp.headers.get("content-type", "").lower():
+            html = resp.text[:150_000]
+            og_t = re.search(r'<meta[^>]+property=["\']og:title["\'][^>]+content=["\']([^"\']+)["\']', html, re.I)
+            og_d = re.search(r'<meta[^>]+property=["\']og:description["\'][^>]+content=["\']([^"\']+)["\']', html, re.I)
+            og_i = re.search(r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\']([^"\']+)["\']', html, re.I)
+            if og_t:
+                title = unescape(og_t.group(1))
+                m = re.match(r"^(.*?)\s*\(@([^)]+)\)", title)
+                if m:
+                    info["name"] = m.group(1).strip()
+            if og_d:
+                desc = unescape(og_d.group(1))
+                if "login" not in desc.lower() and "create an account" not in desc.lower():
+                    info["bio"] = desc[:400]
+                    fm = re.search(r"([\d,.]+[KMB]?)\s+Followers", desc, re.I)
+                    if fm:
+                        info["followers"] = fm.group(1)
+            if og_i and "instagram" not in og_i.group(1).lower():
+                info["avatar_url"] = og_i.group(1)
+    except Exception:
+        pass
+
+    if not info.get("bio") and username:
+        try:
+            ddg = await client.get(
+                f"https://html.duckduckgo.com/html/?q={quote_plus(f'site:instagram.com/{username}')}",
+                headers=BROWSER_HEADERS,
+                follow_redirects=True,
+                timeout=6.0,
+            )
+            if ddg.status_code == 200:
+                ddg_html = ddg.text[:120_000]
+                m = re.search(
+                    r'<a[^>]*class="result__a"[^>]*>(.*?)</a>',
+                    ddg_html,
+                    re.DOTALL | re.IGNORECASE,
+                )
+                if m:
+                    tail = ddg_html[m.end() : m.end() + 800]
+                    sm = re.search(r'<a[^>]*class="result__snippet"[^>]*>(.*?)</a>', tail, re.DOTALL | re.IGNORECASE)
+                    t = unescape(re.sub(r"<[^>]+>", " ", m.group(1))).strip()
+                    s = unescape(re.sub(r"<[^>]+>", " ", sm.group(1) if sm else "")).strip()
+                    nm = re.match(r"^(.*?)\s*\(@([^)]+)\)", t)
+                    if nm:
+                        info["name"] = nm.group(1).strip()
+                    if s:
+                        info["bio"] = s[:400]
+                        fm = re.search(r"([\d,.]+[KMB]?)\s+Followers", s, re.I)
+                        if fm:
+                            info["followers"] = fm.group(1)
+        except Exception:
+            pass
+    return info
+
+
 async def analyze_profile_hit(hit: Hit, client: httpx.AsyncClient) -> dict[str, Any]:
     """Deeply analyze a discovered PROFILE hit using platform APIs or HTML extraction."""
     url = hit.metadata.get("url") or (
@@ -984,6 +1047,8 @@ async def analyze_profile_hit(hit: Hit, client: httpx.AsyncClient) -> dict[str, 
         info = await _analyze_huggingface(username, client)
     elif "t.me" in host:
         info = await _analyze_telegram(url, client)
+    elif "instagram.com" in host and username:
+        info = await _analyze_instagram(url, username, client)
 
     if not info:
         info = await _analyze_generic_html(url, client)
