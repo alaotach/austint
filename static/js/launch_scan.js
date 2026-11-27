@@ -266,11 +266,11 @@
     };
 
     if (launchMode === "freetext") {
-      payload.free_text = document.getElementById("target-freetext")?.value || "";
+      payload.free_text = (document.getElementById("target-freetext")?.value || "").trim();
       if (parsedSeeds.length) payload.seeds = parsedSeeds;
     } else {
-      payload.target_kind = document.getElementById("target-kind")?.value || "domain";
-      payload.target_value = (document.getElementById("target-value")?.value || "").trim();
+      payload.kind = document.getElementById("target-kind")?.value || "domain";
+      payload.value = (document.getElementById("target-value")?.value || "").trim();
     }
 
     scanBudget = { maxTools: maxCalls, maxLlm: maxLlm, toolsUsed: 0, llmUsed: 0 };
