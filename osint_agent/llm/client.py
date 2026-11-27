@@ -359,7 +359,7 @@ class OpenRouterClient(BaseClient):
             "https://ai.hackclub.com/proxy/v1/chat/completions",
         )
 
-    def complete_json(self, system: str, user: str, max_tokens: int = 1000) -> dict[str, Any]:
+    def complete_json(self, system: str, user: str, max_tokens: int = 2048) -> dict[str, Any]:
         return self.complete_multimodal_json(system=system, user=user, image_urls=None, max_tokens=max_tokens)
 
     def complete_multimodal_json(
@@ -367,7 +367,7 @@ class OpenRouterClient(BaseClient):
         system: str,
         user: str,
         image_urls: list[str] | None = None,
-        max_tokens: int = 1000,
+        max_tokens: int = 2048,
     ) -> dict[str, Any]:
         global _RATE_LIMIT_COOLDOWN_UNTIL
         if not self.api_key:
@@ -539,7 +539,7 @@ class G4FClient(BaseClient):
             timeout=self.timeout,
         )
 
-    def complete_json(self, system: str, user: str, max_tokens: int = 1000) -> dict[str, Any]:
+    def complete_json(self, system: str, user: str, max_tokens: int = 2048) -> dict[str, Any]:
         return self.complete_multimodal_json(system=system, user=user, image_urls=None, max_tokens=max_tokens)
 
     def complete_multimodal_json(
@@ -547,7 +547,7 @@ class G4FClient(BaseClient):
         system: str,
         user: str,
         image_urls: list[str] | None = None,
-        max_tokens: int = 1000,
+        max_tokens: int = 2048,
     ) -> dict[str, Any]:
         self._check_budget()
         if not image_urls:
@@ -601,7 +601,17 @@ class G4FClient(BaseClient):
 def get_llm_client(provider: str | None = None, call_budget: int = 20) -> LLMClient:
     """Factory creating configured LLM client instance."""
     _load_dotenv()
-    chosen = (provider or os.getenv("LLM_PROVIDER", "anthropic")).lower()
+    default_prov = os.getenv("LLM_PROVIDER") or (
+        "eryzalabs" if os.getenv("ERYZALABS_API_KEY") else "anthropic"
+    )
+    chosen = (provider or default_prov).lower()
+    if chosen in ("eryzalabs", "eryza"):
+        return OpenRouterClient(
+            api_key=os.getenv("ERYZALABS_API_KEY", ""),
+            model=os.getenv("ERYZALABS_MODEL", "app-default"),
+            base_url=os.getenv("ERYZALABS_BASE_URL", "https://llm.eryzalabs.cloud/v1/chat/completions"),
+            call_budget=call_budget,
+        )
     if chosen in ("openrouter", "openai", "hackclub"):
         return OpenRouterClient(call_budget=call_budget)
     if chosen == "g4f":

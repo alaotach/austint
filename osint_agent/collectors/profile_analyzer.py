@@ -1186,7 +1186,14 @@ async def analyze_profile_hit(hit: Hit, client: httpx.AsyncClient) -> dict[str, 
     if info.get("linked_urls"):
         hit.metadata["linked_urls"] = info["linked_urls"]
     if info.get("avatar_url"):
-        hit.metadata["avatar_url"] = info["avatar_url"]
+        from urllib.parse import urljoin
+
+        av = str(info["avatar_url"]).strip()
+        if av.startswith("//"):
+            av = "https:" + av
+        elif not av.startswith(("http://", "https://", "data:")):
+            av = urljoin(url, av)
+        hit.metadata["avatar_url"] = av
     if info.get("images"):
         hit.metadata["images"] = info["images"]
     if info.get("extra_fields"):
@@ -1227,12 +1234,18 @@ def _resolve_optional_llm_client(llm_client: Any = None) -> Any:
 
     _load_dotenv()
     provider = os.getenv("LLM_PROVIDER", "").lower()
+    if provider in ("eryzalabs", "eryza") and os.getenv("ERYZALABS_API_KEY"):
+        return get_llm_client(provider="eryzalabs", call_budget=15)
+    if provider == "g4f":
+        return get_llm_client(provider="g4f", call_budget=15)
     if provider in ("openrouter", "openai", "hackclub") and os.getenv("OPENROUTER_API_KEY"):
         return get_llm_client(provider="openrouter", call_budget=15)
     if provider == "anthropic" and os.getenv("ANTHROPIC_API_KEY"):
         return get_llm_client(provider="anthropic", call_budget=15)
     if provider == "gemini" and os.getenv("GEMINI_API_KEY"):
         return get_llm_client(provider="gemini", call_budget=15)
+    if os.getenv("ERYZALABS_API_KEY"):
+        return get_llm_client(provider="eryzalabs", call_budget=15)
     if os.getenv("OPENROUTER_API_KEY"):
         return get_llm_client(provider="openrouter", call_budget=15)
     return None

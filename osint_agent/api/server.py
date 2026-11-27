@@ -94,7 +94,7 @@ class JobState:
 
 class ParseSeedsRequest(BaseModel):
     text: str = Field(..., min_length=1, description="Free-text target description to parse")
-    provider: str | None = Field("anthropic", description="LLM provider: anthropic, gemini, or fake")
+    provider: str | None = Field(None, description="LLM provider: eryzalabs, g4f, anthropic, gemini, or fake")
 
 
 class InvestigateRequest(BaseModel):
@@ -117,7 +117,7 @@ class InvestigateRequest(BaseModel):
     resolver: str = Field("learned", description="Entity resolver: 'baseline' or 'learned'")
     model_path: str = Field("models/model.joblib", description="Path to trained ML model checkpoint")
     planner: str = Field("rule", description="Tool execution planner: 'rule' or 'llm'")
-    llm_provider: str = Field("anthropic", description="LLM provider for LLMPlanner: anthropic, gemini, or fake")
+    llm_provider: str | None = Field(None, description="LLM provider for LLMPlanner: eryzalabs, g4f, anthropic, gemini, or fake")
     max_llm_calls: int = Field(20, ge=1, le=100, description="Budget for LLM operations")
 
 
@@ -471,7 +471,7 @@ async def parse_seeds_endpoint(req: ParseSeedsRequest) -> dict[str, Any]:
     """Parse unstructured text into candidate OSINT seed entities with safety filters."""
     client = None
     try:
-        client = get_llm_client(provider=req.provider or "anthropic")
+        client = get_llm_client(provider=req.provider)
     except Exception:
         pass
 

@@ -2378,21 +2378,6 @@ def reset_exa_state() -> None:
     _EXA_COOLDOWN_UNTIL = 0.0
 
 
-@register_tool(
-    name="exa_search",
-    target_types=[
-        EntityType.USERNAME,
-        EntityType.EMAIL,
-        EntityType.PUBLIC_FIGURE,
-        EntityType.CONSENTING_PERSON,
-        EntityType.ORG,
-        EntityType.DOMAIN,
-    ],
-    description=(
-        "Uses Exa AI neural/keyword web search to find public profiles, apps, mentions, "
-        "and page text for an email, username, person, org, or domain. Never retries on 402/429."
-    ),
-)
 def _build_search_queries(entity: Entity) -> list[str]:
     """Generate ranked query variants for an entity."""
     val = entity.value.strip()
@@ -2456,6 +2441,21 @@ async def _search_google_pse(query: str, api_key: str, cx: str, client: httpx.As
     ]
 
 
+@register_tool(
+    name="exa_search",
+    target_types=[
+        EntityType.USERNAME,
+        EntityType.EMAIL,
+        EntityType.PUBLIC_FIGURE,
+        EntityType.CONSENTING_PERSON,
+        EntityType.ORG,
+        EntityType.DOMAIN,
+    ],
+    description=(
+        "Uses Exa AI neural/keyword web search to find public profiles, apps, mentions, "
+        "and page text for an email, username, person, org, or domain. Never retries on 402/429."
+    ),
+)
 async def collect_exa_search(entity: Entity, client: httpx.AsyncClient) -> list[Hit]:
     """Pluggable web-search collector (Brave, Tavily, Google PSE, or Exa). Skips with tool_unavailable if no key is set."""
     global _EXA_402_BLOCKED, _EXA_COOLDOWN_UNTIL

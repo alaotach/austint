@@ -165,7 +165,7 @@
       ? `<div style="height:44px; border-radius:4px; background:url('${esc(attrs.banner || attrs.banner_url)}') center/cover no-repeat; margin-bottom:8px; border:1px solid var(--border-subtle);"></div>`
       : "";
     const avatarHtml = attrs.avatar || attrs.avatar_url
-      ? `<img src="${esc(attrs.avatar || attrs.avatar_url)}" alt="" width="32" height="32" style="border-radius:50%; object-fit:cover; border:1px solid var(--border-strong);">`
+      ? `<img src="${esc(attrs.avatar || attrs.avatar_url)}" alt="" width="32" height="32" onerror="this.style.display='none'" style="border-radius:50%; object-fit:cover; border:1px solid var(--border-strong);">`
       : "";
 
     return `
