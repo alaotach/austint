@@ -2393,187 +2393,189 @@ def reset_exa_state() -> None:
         "and page text for an email, username, person, org, or domain. Never retries on 402/429."
     ),
 )
-async def _duckduckgo_web_fallback(
-    entity: Entity,
-    client: httpx.AsyncClient,
-    query: str,
-) -> list[Hit]:
-    """Free keyless DuckDuckGo HTML search fallback when Exa API is unavailable or rate-limited."""
-    from html import unescape
-    from urllib.parse import parse_qs, quote_plus, unquote, urlparse
-
+def _build_search_queries(entity: Entity) -> list[str]:
+    """Generate ranked query variants for an entity."""
     val = entity.value.strip()
-    queries = [query]
+    if entity.entity_type == EntityType.DOMAIN:
+        return [f'site:{val} OR "{val}"', f'"{val}"']
+    city = str((entity.attributes or {}).get("location") or "").strip()
+    queries = [f'"{val}"']
     if entity.entity_type in (EntityType.USERNAME, EntityType.PUBLIC_FIGURE, EntityType.CONSENTING_PERSON):
-        queries.append(f'site:instagram.com "{val}"')
+        queries.append(f'"{val}" site:github.com')
+    if city:
+        queries.append(f'"{val}" "{city}"')
+    return queries
 
-    hits: list[Hit] = []
-    seen_urls: set[str] = set()
-    for q in queries:
-        try:
-            resp = await client.get(
-                f"https://html.duckduckgo.com/html/?q={quote_plus(q)}",
-                headers={"User-Agent": DEFAULT_USER_AGENT},
-                follow_redirects=True,
-                timeout=10.0,
-            )
-            if resp.status_code != 200:
-                continue
-            html = resp.text[:250_000]
-            blocks = []
-            for am in re.finditer(
-                r'<a[^>]*class="result__a"[^>]*href="([^"]+)"[^>]*>(.*?)</a>',
-                html,
-                re.DOTALL | re.IGNORECASE,
-            ):
-                tail = html[am.end() : am.end() + 800]
-                sm = re.search(r'<a[^>]*class="result__snippet"[^>]*>(.*?)</a>', tail, re.DOTALL | re.IGNORECASE)
-                blocks.append((am.group(1), am.group(2), sm.group(1) if sm else ""))
-            for raw_href, raw_title, raw_snip in blocks[:6]:
-                href = unescape(raw_href)
-                if "uddg=" in href:
-                    qs = parse_qs(urlparse(href).query)
-                    if qs.get("uddg"):
-                        href = unquote(qs["uddg"][0])
-                if not href.startswith(("http://", "https://")) or href in seen_urls:
-                    continue
-                seen_urls.add(href)
-                title = unescape(re.sub(r"<[^>]+>", " ", raw_title)).strip()
-                snippet = unescape(re.sub(r"<[^>]+>", " ", raw_snip or "")).strip()
-                site = urlparse(href).netloc.lower()
-                meta: dict[str, Any] = {
-                    "site": site,
-                    "url": href,
-                    "title": title,
-                    "bio": snippet[:400] if snippet else title,
-                }
-                if "instagram.com" in site:
-                    ig_m = re.match(r"^(.*?)\s*\(@([^)]+)\)", title)
-                    if ig_m:
-                        meta["name"] = ig_m.group(1).strip()
-                        meta["username"] = ig_m.group(2).strip()
-                    fol_m = re.search(r"([\d,.]+[KMB]?)\s+Followers", snippet, re.IGNORECASE)
-                    if fol_m:
-                        meta["followers"] = fol_m.group(1)
-                hits.append(
-                    Hit(
-                        target_entity_id=entity.id,
-                        discovered_type=EntityType.PROFILE,
-                        discovered_value=href,
-                        relation="web_mention",
-                        source_tool="exa_search",
-                        is_trusted=False,
-                        raw_data={"site": site, "url": href, "title": title, "description": snippet[:300]},
-                        metadata=meta,
-                    )
-                )
-        except Exception:
-            continue
-    return hits[:8]
+
+async def _search_brave(query: str, api_key: str, client: httpx.AsyncClient) -> list[dict[str, str]]:
+    resp = await client.get(
+        "https://api.search.brave.com/res/v1/web/search",
+        headers={"X-Subscription-Token": api_key, "Accept": "application/json"},
+        params={"q": query, "count": 5},
+        timeout=10.0,
+    )
+    if resp.status_code != 200:
+        return []
+    results = (resp.json().get("web") or {}).get("results") or []
+    return [
+        {"url": str(r.get("url") or ""), "title": str(r.get("title") or ""), "snippet": str(r.get("description") or "")}
+        for r in results
+        if isinstance(r, dict)
+    ]
+
+
+async def _search_tavily(query: str, api_key: str, client: httpx.AsyncClient) -> list[dict[str, str]]:
+    resp = await client.post(
+        "https://api.tavily.com/search",
+        json={"api_key": api_key, "query": query, "max_results": 5},
+        timeout=10.0,
+    )
+    if resp.status_code != 200:
+        return []
+    results = resp.json().get("results") or []
+    return [
+        {"url": str(r.get("url") or ""), "title": str(r.get("title") or ""), "snippet": str(r.get("content") or "")}
+        for r in results
+        if isinstance(r, dict)
+    ]
+
+
+async def _search_google_pse(query: str, api_key: str, cx: str, client: httpx.AsyncClient) -> list[dict[str, str]]:
+    resp = await client.get(
+        "https://www.googleapis.com/customsearch/v1",
+        params={"key": api_key, "cx": cx, "q": query, "num": 5},
+        timeout=10.0,
+    )
+    if resp.status_code != 200:
+        return []
+    results = resp.json().get("items") or []
+    return [
+        {"url": str(r.get("link") or ""), "title": str(r.get("title") or ""), "snippet": str(r.get("snippet") or "")}
+        for r in results
+        if isinstance(r, dict)
+    ]
 
 
 async def collect_exa_search(entity: Entity, client: httpx.AsyncClient) -> list[Hit]:
-    """Query Exa /search once for the entity and emit PROFILE hits; falls back to DuckDuckGo HTML."""
+    """Pluggable web-search collector (Brave, Tavily, Google PSE, or Exa). Skips with tool_unavailable if no key is set."""
     global _EXA_402_BLOCKED, _EXA_COOLDOWN_UNTIL
     import time
+    from urllib.parse import urlparse
     from osint_agent.llm.client import _load_dotenv
 
     val = entity.value.strip()
     if not val or len(val) < 2:
         return []
 
-    if entity.entity_type == EntityType.DOMAIN:
-        query = f'site:{val} OR "{val}"'
-    else:
-        query = f'"{val}"'
-
     _load_dotenv()
-    api_key = os.getenv("EXA_API_KEY") or os.getenv("OPENROUTER_API_KEY", "")
-    if _EXA_402_BLOCKED or time.monotonic() < _EXA_COOLDOWN_UNTIL or not api_key:
-        return await _duckduckgo_web_fallback(entity, client, query)
+    brave_key = os.getenv("BRAVE_SEARCH_API_KEY", "").strip()
+    tavily_key = os.getenv("TAVILY_API_KEY", "").strip()
+    google_key = os.getenv("GOOGLE_PSE_API_KEY", "").strip()
+    google_cx = os.getenv("GOOGLE_PSE_CX", "").strip()
+    exa_key = os.getenv("EXA_API_KEY", "").strip()
 
-    base_url = os.getenv("EXA_BASE_URL", "https://ai.hackclub.com/proxy/v1/exa").rstrip("/")
-    search_url = f"{base_url}/search"
-
-    hits: list[Hit] = []
-    try:
-        resp = await client.post(
-            search_url,
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
+    has_pluggable = bool(brave_key or tavily_key or (google_key and google_cx) or (exa_key and not _EXA_402_BLOCKED and time.monotonic() >= _EXA_COOLDOWN_UNTIL))
+    if not has_pluggable:
+        log_audit_event(
+            "tool_unavailable",
+            {
+                "tool": "exa_search",
+                "reason": "No web search API key configured (BRAVE_SEARCH_API_KEY, TAVILY_API_KEY, GOOGLE_PSE_API_KEY+GOOGLE_PSE_CX, or EXA_API_KEY).",
             },
-            json={
-                "query": query,
-                "numResults": 5,
-                "contents": {"text": {"maxCharacters": 800}},
-            },
-            timeout=12.0,
         )
+        return []
 
-        # NEVER retry on 402 (allowance/credits exhausted) — disable for session & fallback
-        if resp.status_code == 402:
-            _EXA_402_BLOCKED = True
-            logger.warning("Exa returned 402 Payment Required — using DuckDuckGo web fallback.")
-            return await _duckduckgo_web_fallback(entity, client, query)
+    queries = _build_search_queries(entity)
+    raw_items: list[tuple[int, dict[str, str]]] = []
 
-        # NEVER retry on 429 — trip cooldown immediately & fallback
-        if resp.status_code == 429:
-            _EXA_COOLDOWN_UNTIL = time.monotonic() + 120.0
-            logger.warning("Exa returned 429 Too Many Requests — using DuckDuckGo web fallback.")
-            return await _duckduckgo_web_fallback(entity, client, query)
-
-        if resp.status_code != 200:
-            logger.debug("Exa search HTTP %d for %s — using DuckDuckGo fallback", resp.status_code, val)
-            return await _duckduckgo_web_fallback(entity, client, query)
-
-        data = resp.json()
-        results = data.get("results") or []
-        seen_urls: set[str] = set()
-        for res in results[:5]:
-            if not isinstance(res, dict):
-                continue
-            url = str(res.get("url") or "").strip()
-            if not url.startswith(("http://", "https://")) or url in seen_urls:
-                continue
-            seen_urls.add(url)
-
-            title = str(res.get("title") or "").strip()
-            author = str(res.get("author") or "").strip()
-            pub_date = str(res.get("publishedDate") or "").strip()
-            text_excerpt = str(res.get("text") or "").strip()[:800]
-
-            from urllib.parse import urlparse
-            site = urlparse(url).netloc.lower()
-
-            hits.append(
-                Hit(
-                    target_entity_id=entity.id,
-                    discovered_type=EntityType.PROFILE,
-                    discovered_value=url,
-                    relation="web_mention",
-                    source_tool="exa_search",
-                    is_trusted=False,
-                    raw_data={
-                        "site": site,
-                        "url": url,
-                        "title": title,
-                        "author": author,
-                        "published_date": pub_date,
-                        "description": f"{title} — {text_excerpt[:300]}" if title else text_excerpt[:300],
-                        "_page_text_excerpt": text_excerpt,
-                    },
-                    metadata={
-                        "site": site,
-                        "url": url,
-                        "title": title,
-                        "bio": text_excerpt[:400] if text_excerpt else title,
-                        **({"name": author} if author else {}),
-                        **({"published_date": pub_date} if pub_date else {}),
-                    },
+    for q_idx, query in enumerate(queries):
+        batch: list[dict[str, str]] = []
+        if brave_key:
+            batch = await _search_brave(query, brave_key, client)
+        elif tavily_key:
+            batch = await _search_tavily(query, tavily_key, client)
+        elif google_key and google_cx:
+            batch = await _search_google_pse(query, google_key, google_cx, client)
+        elif exa_key and not _EXA_402_BLOCKED and time.monotonic() >= _EXA_COOLDOWN_UNTIL:
+            base_url = os.getenv("EXA_BASE_URL", "https://ai.hackclub.com/proxy/v1/exa").rstrip("/")
+            try:
+                resp = await client.post(
+                    f"{base_url}/search",
+                    headers={"Authorization": f"Bearer {exa_key}", "Content-Type": "application/json"},
+                    json={"query": query, "numResults": 5, "contents": {"text": {"maxCharacters": 800}}},
+                    timeout=12.0,
                 )
-            )
-    except (httpx.HTTPError, httpx.TimeoutException, ValueError) as exc:
-        logger.debug("Exa search failed for %s: %s", val, exc)
+                if resp.status_code == 402:
+                    _EXA_402_BLOCKED = True
+                    break
+                elif resp.status_code == 429:
+                    _EXA_COOLDOWN_UNTIL = time.monotonic() + 120.0
+                    break
+                elif resp.status_code == 200:
+                    for r in resp.json().get("results") or []:
+                        if isinstance(r, dict):
+                            batch.append(
+                                {
+                                    "url": str(r.get("url") or ""),
+                                    "title": str(r.get("title") or ""),
+                                    "snippet": str(r.get("text") or "")[:800],
+                                    "author": str(r.get("author") or "").strip(),
+                                    "published_date": str(r.get("publishedDate") or "").strip(),
+                                }
+                            )
+            except Exception:
+                pass
+        for item in batch:
+            raw_items.append((q_idx, item))
 
+    deduped: dict[str, tuple[float, dict[str, str]]] = {}
+    val_lower = val.lower()
+    for q_idx, item in raw_items:
+        url = str(item.get("url") or "").strip()
+        if not url.startswith(("http://", "https://")):
+            continue
+        norm = url.rstrip("/").lower()
+        title = str(item.get("title") or "").strip()
+        snippet = str(item.get("snippet") or "").strip()
+        score = (3 - q_idx) + (2.0 if val_lower in url.lower() else 0.0) + (1.0 if val_lower in title.lower() else 0.0)
+        if norm not in deduped or score > deduped[norm][0]:
+            deduped[norm] = (
+                score,
+                {
+                    "url": url,
+                    "title": title,
+                    "snippet": snippet,
+                    "author": str(item.get("author") or ""),
+                    "published_date": str(item.get("published_date") or ""),
+                },
+            )
+
+    ranked = sorted(deduped.values(), key=lambda pair: pair[0], reverse=True)
+    hits: list[Hit] = []
+    for _, item in ranked[:8]:
+        url = item["url"]
+        title = item["title"]
+        snippet = item["snippet"]
+        author = item.get("author", "")
+        pub_date = item.get("published_date", "")
+        site = urlparse(url).netloc.lower()
+        hits.append(
+            Hit(
+                target_entity_id=entity.id,
+                discovered_type=EntityType.PROFILE,
+                discovered_value=url,
+                relation="web_mention",
+                source_tool="exa_search",
+                is_trusted=False,
+                raw_data={"site": site, "url": url, "title": title, "description": snippet[:300]},
+                metadata={
+                    "site": site,
+                    "url": url,
+                    "title": title,
+                    "bio": snippet[:400] if snippet else title,
+                    **({"name": author} if author else {}),
+                    **({"published_date": pub_date} if pub_date else {}),
+                },
+            )
+        )
     return hits

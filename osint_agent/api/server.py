@@ -114,7 +114,7 @@ class InvestigateRequest(BaseModel):
 
 
 COLLECTOR_METADATA: dict[str, dict[str, Any]] = {
-    "sherlock": {"category": "Username & Social", "expected_fields": ["username", "url", "site"]},
+    "sherlock": {"category": "Username & Social", "expected_fields": ["username", "name", "bio", "location", "joined", "followers", "links", "avatar", "banner", "orgs", "activity_dates"]},
     "maigret": {"category": "Username & Social", "expected_fields": ["username", "name", "bio", "location", "joined", "followers", "links", "avatar", "banner", "activity_dates", "site"]},
     "playstore_intel": {"category": "Username & Social", "expected_fields": ["name", "developer", "url", "description", "rating"]},
     "github_code_intel": {"category": "Code & Dev", "expected_fields": ["username", "name", "bio", "location", "joined", "followers", "links", "avatar", "pinned_repos", "languages", "orgs"]},

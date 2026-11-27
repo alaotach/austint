@@ -135,7 +135,8 @@
     }
 
     if (!rows.length && !sensitiveHtml) {
-      return `<div class="state-panel" style="padding: var(--space-2); font-size:11px;">Found, little public data exposed by source.</div>`;
+      const note = attrs.status_note || (attrs.limited_public_data ? "Exists, limited public data (login-walled)." : "Found, little public data exposed by source.");
+      return `<div class="state-panel" style="padding: var(--space-2); font-size:11px;">${esc(note)}</div>`;
     }
     return `<div style="display:flex; flex-direction:column; gap:4px;">${rows.join("")}${sensitiveHtml}</div>`;
   }

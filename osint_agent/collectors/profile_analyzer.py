@@ -950,10 +950,9 @@ async def _analyze_generic_html(url: str, client: httpx.AsyncClient) -> dict[str
     return info
 
 
-async def _analyze_instagram(url: str, username: str, client: httpx.AsyncClient) -> dict[str, Any]:
-    """Extract public Instagram name, bio, and follower counts via public OG tags or DuckDuckGo snippet."""
+async def _analyze_login_walled_og_only(url: str, client: httpx.AsyncClient) -> dict[str, Any]:
+    """Parse public og:* tags only for login-walled platforms (Instagram, X, Facebook, LinkedIn)."""
     from html import unescape
-    from urllib.parse import quote_plus
 
     info: dict[str, Any] = {}
     try:
@@ -980,37 +979,15 @@ async def _analyze_instagram(url: str, username: str, client: httpx.AsyncClient)
     except Exception:
         pass
 
-    if not info.get("bio") and username:
-        try:
-            ddg = await client.get(
-                f"https://html.duckduckgo.com/html/?q={quote_plus(f'site:instagram.com/{username}')}",
-                headers=BROWSER_HEADERS,
-                follow_redirects=True,
-                timeout=6.0,
-            )
-            if ddg.status_code == 200:
-                ddg_html = ddg.text[:120_000]
-                m = re.search(
-                    r'<a[^>]*class="result__a"[^>]*>(.*?)</a>',
-                    ddg_html,
-                    re.DOTALL | re.IGNORECASE,
-                )
-                if m:
-                    tail = ddg_html[m.end() : m.end() + 800]
-                    sm = re.search(r'<a[^>]*class="result__snippet"[^>]*>(.*?)</a>', tail, re.DOTALL | re.IGNORECASE)
-                    t = unescape(re.sub(r"<[^>]+>", " ", m.group(1))).strip()
-                    s = unescape(re.sub(r"<[^>]+>", " ", sm.group(1) if sm else "")).strip()
-                    nm = re.match(r"^(.*?)\s*\(@([^)]+)\)", t)
-                    if nm:
-                        info["name"] = nm.group(1).strip()
-                    if s:
-                        info["bio"] = s[:400]
-                        fm = re.search(r"([\d,.]+[KMB]?)\s+Followers", s, re.I)
-                        if fm:
-                            info["followers"] = fm.group(1)
-        except Exception:
-            pass
+    if not info.get("bio") and not info.get("name"):
+        info["limited_public_data"] = True
+        info["status_note"] = "exists, limited public data"
     return info
+
+
+async def _analyze_instagram(url: str, username: str, client: httpx.AsyncClient) -> dict[str, Any]:
+    """Public og:* tag parser for Instagram; returns 'exists, limited public data' when login-walled."""
+    return await _analyze_login_walled_og_only(url, client)
 
 
 async def analyze_profile_hit(hit: Hit, client: httpx.AsyncClient) -> dict[str, Any]:
@@ -1049,6 +1026,8 @@ async def analyze_profile_hit(hit: Hit, client: httpx.AsyncClient) -> dict[str, 
         info = await _analyze_telegram(url, client)
     elif "instagram.com" in host and username:
         info = await _analyze_instagram(url, username, client)
+    elif any(d in host for d in ("x.com", "twitter.com", "facebook.com", "linkedin.com")):
+        info = await _analyze_login_walled_og_only(url, client)
 
     if not info:
         info = await _analyze_generic_html(url, client)
@@ -1058,6 +1037,12 @@ async def analyze_profile_hit(hit: Hit, client: httpx.AsyncClient) -> dict[str, 
 
     # Merge extracted fields back into Hit's raw_data & metadata
     text_parts = []
+    if info.get("limited_public_data"):
+        hit.metadata["limited_public_data"] = True
+        hit.metadata["status_note"] = info.get("status_note", "exists, limited public data")
+    for extra_k in ("followers", "joined", "activity_dates", "banner_url", "languages", "orgs", "pinned_repos"):
+        if info.get(extra_k) is not None:
+            hit.metadata[extra_k] = info[extra_k]
     if info.get("name"):
         hit.metadata["name"] = info["name"]
         hit.raw_data["name"] = info["name"]

@@ -19,4 +19,6 @@ demo_audit.jsonl
 audit_job_*.jsonl
 .osint_dead_hosts.json
 .env
+data/ground_truth/
+tests/fixtures/raw/
 data/
