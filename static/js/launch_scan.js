@@ -288,16 +288,32 @@
           const resp = await fetch(`/api/saved-runs/${encodeURIComponent(rid)}`);
           if (!resp.ok) return;
           const snap = await resp.json();
+          resetCollectorStatus();
           window.OSINT_STATE.isRecordedRun = true;
           window.OSINT_STATE.jobId = snap.job_id || snap.id;
           window.OSINT_STATE.nodes = snap.nodes || [];
           window.OSINT_STATE.edges = snap.edges || [];
-          window.OSINT_STATE.auditEvents = snap.audit_events || [];
+          window.OSINT_STATE.auditEvents = [];
+          const tel = snap.telemetry || {};
+          if (tel.scanBudget) {
+            scanBudget = { ...tel.scanBudget };
+          } else {
+            scanBudget = { maxTools: 15, maxLlm: 10, toolsUsed: 0, llmUsed: 0 };
+          }
+          if (tel.collectorStatus) {
+            Object.entries(tel.collectorStatus).forEach(([k, v]) => {
+              if (collectorStatus[k] && v) collectorStatus[k] = { ...collectorStatus[k], ...v };
+            });
+            window.OSINT_STATE.auditEvents = snap.audit_events || [];
+          } else {
+            (snap.audit_events || []).forEach((ev) => handleEvent(ev));
+          }
           document.getElementById("header-job-id").textContent = window.OSINT_STATE.jobId || "--";
           document.getElementById("header-node-count").textContent = String(window.OSINT_STATE.nodes.length);
           document.getElementById("header-edge-count").textContent = String(window.OSINT_STATE.edges.length);
           document.getElementById("nav-badge-results").textContent = String(window.OSINT_STATE.nodes.length);
           document.getElementById("nav-badge-audit").textContent = String(window.OSINT_STATE.auditEvents.length);
+          renderScanView();
           if (typeof window.onGraphUpdated === "function") window.onGraphUpdated();
           if (typeof window.onAuditUpdated === "function") window.onAuditUpdated();
           window.OSINT_UI.switchView("results");
@@ -316,6 +332,12 @@
     }
   }
   window.refreshSavedRuns = refreshSavedRuns;
+  window.getScanTelemetry = function () {
+    return {
+      collectorStatus: JSON.parse(JSON.stringify(collectorStatus)),
+      scanBudget: { ...scanBudget },
+    };
+  };
 
   async function startInvestigation() {
     const errEl = document.getElementById("launch-error");

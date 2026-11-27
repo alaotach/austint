@@ -455,6 +455,7 @@ class SaveRunRequest(BaseModel):
     nodes: list[dict[str, Any]] = Field(default_factory=list)
     edges: list[dict[str, Any]] = Field(default_factory=list)
     audit_events: list[dict[str, Any]] = Field(default_factory=list)
+    telemetry: dict[str, Any] = Field(default_factory=dict)
 
 
 def _safe_run_path(run_id: str) -> Path:
@@ -505,7 +506,8 @@ async def save_run_snapshot(req: SaveRunRequest) -> dict[str, Any]:
         "created_at": datetime.now(timezone.utc).isoformat(),
         "nodes": req.nodes,
         "edges": req.edges,
-        "audit_events": req.audit_events[-500:],
+        "audit_events": req.audit_events[-5000:],
+        "telemetry": req.telemetry,
     }
     _safe_run_path(run_id).write_text(json.dumps(payload), encoding="utf-8")
     return {

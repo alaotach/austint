@@ -403,6 +403,7 @@
             nodes: window.OSINT_STATE.nodes || [],
             edges: window.OSINT_STATE.edges || [],
             audit_events: window.OSINT_STATE.auditEvents || [],
+            telemetry: typeof window.getScanTelemetry === "function" ? window.getScanTelemetry() : {},
           }),
         });
         if (resp.ok && btn) {
