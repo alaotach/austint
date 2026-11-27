@@ -343,12 +343,12 @@
     filtered.sort((a, b) => {
       const da = a.data || {};
       const db = b.data || {};
-      const ca = Number(da.confidence ?? 0);
-      const cb = Number(db.confidence ?? 0);
-      if (Math.abs(cb - ca) > 1e-6) return cb - ca;
       const fa = computeCoverageClient(da).extracted_count || 0;
       const fb = computeCoverageClient(db).extracted_count || 0;
       if (fb !== fa) return fb - fa;
+      const ca = Number(da.confidence ?? 0);
+      const cb = Number(db.confidence ?? 0);
+      if (Math.abs(cb - ca) > 1e-6) return cb - ca;
       const pa = da.type === "profile" ? 1 : 0;
       const pb = db.type === "profile" ? 1 : 0;
       return pb - pa;
