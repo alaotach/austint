@@ -160,15 +160,19 @@
     const rawLabel = String(d.label || "");
     const isSensitiveRecord = /^(breach|breach-analytics|infostealer):/i.test(rawLabel) || Boolean(attrs.phone || attrs.phones || attrs.breach || attrs.stealer_family);
     const cleanUrlTitle = (urlStr) => {
-      const candidate = [attrs.title, attrs.name, attrs.display_name, attrs.site].find(
-        (v) => typeof v === "string" && v.trim() && !/^https?:\/\//i.test(v.trim())
-      );
-      if (candidate) return candidate.trim();
+      let host = "";
       try {
-        return new URL(urlStr).hostname.replace(/^www\./i, "") || urlStr;
-      } catch {
-        return urlStr;
+        host = new URL(urlStr).hostname.replace(/^www\./i, "");
+      } catch {}
+      const siteName = (typeof attrs.site === "string" && attrs.site.trim()) ? attrs.site.trim() : host;
+      const primary = [attrs.title, attrs.name, attrs.display_name, attrs.username].find(
+        (v) => typeof v === "string" && v.trim() && !/^https?:\/\//i.test(v.trim())
+      )?.trim() || "";
+      if (siteName && primary) {
+        if (primary.toLowerCase().includes(siteName.toLowerCase())) return primary;
+        return `${siteName} · ${primary}`;
       }
+      return primary || siteName || urlStr;
     };
     const displayLabel = isSensitiveRecord
       ? `[Sensitive Finding: ${rawLabel.split(":")[0]}]`
