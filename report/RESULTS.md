@@ -127,9 +127,9 @@ Every number below is generated directly from JSON artifacts in `data/osint_link
 - Explanation: Multiplicative confidence decay (`prod(score * 0.85)`) compresses ~87-92% of multi-hop scores below `0.1`, collapsing threshold separability.
 
 ### 6.6 Zero-Shot LLM Judge (2 Prompt Variants)
-- Status: `excluded_rate_limited` (provider: `g4f`)
-- `minimal`: `excluded_rate_limited` — g4f free providers rate-limited/auth-gated (KiloCode 429 after 82 pairs; GLM requires Chrome captcha; others 401/402/403/timeout); excluded from comparisons.
-- `field_by_field`: `excluded_rate_limited` — g4f free providers rate-limited/auth-gated; excluded from comparisons.
+- Status: `ok` (provider: `g4f/GithubCopilot/gpt-4.1`)
+- `minimal`: PR-AUC=0.9617, F1=0.8502, ECE=0.1085, tokens=65191, cost=$0.0, latency=10468.1384 ms/pair
+- `field_by_field`: PR-AUC=0.9685, F1=0.8216, ECE=0.1144, tokens=77269, cost=$0.0, latency=6476.8015 ms/pair
 
 ## 7. Generated Figures & Tables
 - PR Operating Points: `report/figures/pr_curves.png`
