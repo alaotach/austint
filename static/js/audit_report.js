@@ -20,8 +20,8 @@
     const events = window.OSINT_STATE.auditEvents || [];
     const plannerEvents = events.filter((e) => e.event === "planner_decision");
     const unavailable = events.filter((e) => e.event === "tool_unavailable" || e.event === "tool_call_error");
-    const fallbacks = plannerEvents.filter((e) => Boolean(e.details?.fallback_used)).length;
-    const tokens = plannerEvents.reduce((acc, e) => acc + Number(e.details?.token_usage || 0), 0);
+    const fallbacks = plannerEvents.filter((e) => Boolean((e.details || e.data)?.fallback_used)).length;
+    const tokens = plannerEvents.reduce((acc, e) => acc + Number((e.details || e.data)?.token_usage || 0), 0);
 
     const filtered = events.filter((e) => {
       if (auditFilter === "planner") return e.event === "planner_decision";
@@ -63,7 +63,7 @@
               </thead>
               <tbody>
                 ${filtered.slice(-150).reverse().map((e) => {
-                  const d = e.details || {};
+                  const d = e.details || e.data || {};
                   const actor = d.tool || d.planner || "--";
                   let summary = "";
                   if (e.event === "planner_decision") {

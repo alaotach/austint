@@ -334,7 +334,7 @@
     if (navAudit) navAudit.textContent = String(st.auditEvents.length);
 
     const type = ev.event;
-    const d = ev.details || {};
+    const d = ev.details || ev.data || {};
 
     if (type === "tool_call_started" && d.tool) {
       scanBudget.toolsUsed += 1;
@@ -418,8 +418,9 @@
       document.getElementById("header-job-id").textContent = window.OSINT_STATE.jobId;
       (run.events || []).forEach((ev) => {
         handleEvent(ev);
-        if (ev.event === "profile_discovered" && ev.details && ev.details.url) {
-          const pd = ev.details;
+        const evDetails = ev.details || ev.data;
+        if (ev.event === "profile_discovered" && evDetails && evDetails.url) {
+          const pd = evDetails;
           discoveredMeta[pd.url] = {
             site: pd.site || "",
             url: pd.url,
@@ -429,8 +430,8 @@
           if (nodesMap[id]) {
             Object.assign(nodesMap[id].data.attributes, discoveredMeta[pd.url]);
           }
-        } else if (ev.event === "hit_evaluated" && ev.details) {
-          const d = ev.details;
+        } else if (ev.event === "hit_evaluated" && evDetails) {
+          const d = evDetails;
           const id = `${d.discovered_type || "node"}:${d.discovered_value}`;
           const meta = d.metadata || {};
           const disc = discoveredMeta[d.discovered_value] || {};
@@ -599,7 +600,7 @@
         ${recentHits.length ? `
           <div style="display:flex; flex-direction:column; gap:6px;">
             ${recentHits.map((e) => {
-              const dt = e.details || {};
+              const dt = e.details || e.data || {};
               const acc = dt.accepted ? "badge-confirmed" : "badge-rejected";
               return `
                 <div class="mono" style="font-size:12px; display:flex; justify-content:space-between; flex-wrap:wrap; gap:8px; padding:6px 8px; background:var(--bg-elevated); border-radius:4px;">

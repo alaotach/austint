@@ -98,6 +98,10 @@ class LLMRateLimitError(RuntimeError):
 
 
 _RATE_LIMIT_COOLDOWN_UNTIL: float = 0.0
+import threading as _threading
+_ERYZA_LOCK = _threading.Lock()
+_ERYZA_LAST_CALL: float = 0.0
+_ERYZA_MIN_INTERVAL_SEC: float = 2.0  # <= 30 RPM (safely under 40 RPM limit)
 
 
 def reset_rate_limit_cooldown() -> None:
@@ -425,6 +429,13 @@ class OpenRouterClient(BaseClient):
         for attempt, delay in enumerate(_RETRY_DELAYS):
             if delay > 0:
                 time.sleep(delay)
+            if "eryzalabs" in (self.base_url or "").lower():
+                global _ERYZA_LAST_CALL
+                with _ERYZA_LOCK:
+                    wait_s = _ERYZA_MIN_INTERVAL_SEC - (time.monotonic() - _ERYZA_LAST_CALL)
+                    if wait_s > 0:
+                        time.sleep(wait_s)
+                    _ERYZA_LAST_CALL = time.monotonic()
             try:
                 with httpx.Client(timeout=self.timeout) as client:
                     resp = client.post(self.base_url, json=payload, headers=headers)
@@ -521,7 +532,7 @@ class G4FClient(BaseClient):
             "https://llm.eryzalabs.cloud/v1/chat/completions",
         )
         self.fallback_api_key = os.getenv("ERYZALABS_API_KEY", "")
-        self.fallback_model = os.getenv("ERYZALABS_MODEL", "app-default")
+        self.fallback_model = os.getenv("ERYZALABS_MODEL", "nvidia/nemotron-3.5-lightning-30b-a3b")
         self.fallback_vision_model = os.getenv(
             "ERYZALABS_VISION_MODEL",
             "nvidia/nemotron-3.5-super-vl-120b-a12b",
@@ -608,7 +619,7 @@ def get_llm_client(provider: str | None = None, call_budget: int = 20) -> LLMCli
     if chosen in ("eryzalabs", "eryza"):
         return OpenRouterClient(
             api_key=os.getenv("ERYZALABS_API_KEY", ""),
-            model=os.getenv("ERYZALABS_MODEL", "app-default"),
+            model=os.getenv("ERYZALABS_MODEL", "nvidia/nemotron-3.5-lightning-30b-a3b"),
             base_url=os.getenv("ERYZALABS_BASE_URL", "https://llm.eryzalabs.cloud/v1/chat/completions"),
             call_budget=call_budget,
         )
