@@ -2441,6 +2441,35 @@ async def _search_google_pse(query: str, api_key: str, cx: str, client: httpx.As
     ]
 
 
+async def _fetch_pdf_text(url: str, client: httpx.AsyncClient, max_chars: int = 3000) -> str:
+    """Download a public PDF (<= 5 MB) and extract plain text via pdftotext."""
+    import asyncio
+    import shutil
+
+    try:
+        resp = await client.get(url, timeout=10.0, follow_redirects=True)
+        if resp.status_code != 200 or not resp.content or len(resp.content) > 5_000_000:
+            return ""
+        if not resp.content.lstrip().startswith(b"%PDF") and "pdf" not in resp.headers.get("content-type", "").lower():
+            return ""
+        pdftotext_bin = shutil.which("pdftotext")
+        if pdftotext_bin:
+            proc = await asyncio.create_subprocess_exec(
+                pdftotext_bin,
+                "-",
+                "-",
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, _ = await asyncio.wait_for(proc.communicate(input=resp.content), timeout=8.0)
+            text = re.sub(r"\s+", " ", stdout.decode("utf-8", errors="ignore")).strip()
+            return text[:max_chars]
+    except Exception:
+        return ""
+    return ""
+
+
 @register_tool(
     name="exa_search",
     target_types=[
@@ -2557,6 +2586,11 @@ async def collect_exa_search(entity: Entity, client: httpx.AsyncClient) -> list[
         url = item["url"]
         title = item["title"]
         snippet = item["snippet"]
+        pdf_text = ""
+        if urlparse(url).path.lower().endswith(".pdf"):
+            pdf_text = await _fetch_pdf_text(url, client)
+            if pdf_text:
+                snippet = pdf_text
         author = item.get("author", "")
         pub_date = item.get("published_date", "")
         site = urlparse(url).netloc.lower()
@@ -2568,12 +2602,13 @@ async def collect_exa_search(entity: Entity, client: httpx.AsyncClient) -> list[
                 relation="web_mention",
                 source_tool="exa_search",
                 is_trusted=False,
-                raw_data={"site": site, "url": url, "title": title, "description": snippet[:300]},
+                raw_data={"site": site, "url": url, "title": title, "description": snippet[:1500 if pdf_text else 300]},
                 metadata={
                     "site": site,
                     "url": url,
                     "title": title,
-                    "bio": snippet[:400] if snippet else title,
+                    "bio": (snippet[:1500] if pdf_text else snippet[:400]) if snippet else title,
+                    **({"document_text": pdf_text} if pdf_text else {}),
                     **({"name": author} if author else {}),
                     **({"published_date": pub_date} if pub_date else {}),
                 },
