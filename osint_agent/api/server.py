@@ -538,6 +538,17 @@ async def delete_saved_run(run_id: str) -> dict[str, Any]:
     return {"status": "deleted", "id": run_id}
 
 
+def _google_redirect_uri(request: Request) -> str:
+    explicit = os.getenv("GOOGLE_REDIRECT_URI", "").strip()
+    if explicit:
+        return explicit
+    uri = str(request.url_for("google_oauth_callback"))
+    fwd_proto = request.headers.get("x-forwarded-proto", "").split(",")[0].strip().lower()
+    if fwd_proto == "https" and uri.startswith("http://"):
+        uri = "https://" + uri[len("http://"):]
+    return uri
+
+
 @app.get("/api/google-oauth/start", tags=["System"])
 async def google_oauth_start(request: Request) -> Any:
     """Redirect to Google OAuth2 consent screen to obtain a People API refresh token."""
@@ -547,7 +558,7 @@ async def google_oauth_start(request: Request) -> Any:
     cid = os.getenv("GOOGLE_CLIENT_ID", "").strip()
     if not cid:
         raise HTTPException(status_code=400, detail="GOOGLE_CLIENT_ID is not configured in .env")
-    redirect_uri = str(request.url_for("google_oauth_callback"))
+    redirect_uri = _google_redirect_uri(request)
     params = urlencode({
         "client_id": cid,
         "redirect_uri": redirect_uri,
@@ -569,7 +580,7 @@ async def google_oauth_callback(request: Request, code: str | None = None, error
         return HTMLResponse(f"<h3>Google OAuth failed</h3><pre>{error or 'missing code'}</pre>", status_code=400)
     cid = os.getenv("GOOGLE_CLIENT_ID", "").strip()
     csec = os.getenv("GOOGLE_CLIENT_SECRET", "").strip()
-    redirect_uri = str(request.url_for("google_oauth_callback"))
+    redirect_uri = _google_redirect_uri(request)
     async with httpx.AsyncClient() as client:
         resp = await client.post(
             "https://oauth2.googleapis.com/token",
