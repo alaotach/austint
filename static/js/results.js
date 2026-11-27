@@ -354,6 +354,23 @@
       return pb - pa;
     });
 
+    const normEntityKey = (d) => {
+      const rawUrl = d.attributes?.url || (/^https?:\/\//i.test(String(d.label || "").trim()) ? d.label : "");
+      if (rawUrl) {
+        return "url:" + String(rawUrl).trim().toLowerCase().replace(/^https?:\/\/(www\.)?/, "").replace(/\/+$/, "");
+      }
+      return `${d.type || ""}:${String(d.label || "").trim().toLowerCase()}`;
+    };
+    const seenKeys = new Set();
+    const deduped = [];
+    for (const n of filtered) {
+      const key = normEntityKey(n.data || {});
+      if (seenKeys.has(key)) continue;
+      seenKeys.add(key);
+      deduped.push(n);
+    }
+    filtered.splice(0, filtered.length, ...deduped);
+
     const visible = filtered.slice(0, visibleLimit);
     const dossierHtml = buildDossierHtml(allNodes);
 
