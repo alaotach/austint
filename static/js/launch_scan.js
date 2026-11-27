@@ -227,9 +227,16 @@
         const file = imgInput.files?.[0];
         const prev = document.getElementById("image-preview-result");
         if (!file || !prev) return;
+        const consent = Boolean(document.getElementById("consent-checkbox")?.checked);
+        if (!consent) {
+          prev.innerHTML = `<div class="state-panel state-panel-error">Please check the authorization consent box below before analyzing an image.</div>`;
+          imgInput.value = "";
+          return;
+        }
         prev.innerHTML = `<div class="state-panel">Analyzing ${esc(file.name)}...</div>`;
         const fd = new FormData();
         fd.append("file", file);
+        fd.append("consent_confirmed", "true");
         try {
           const r = await fetch("/api/analyze-image", { method: "POST", body: fd });
           const data = await r.json();
