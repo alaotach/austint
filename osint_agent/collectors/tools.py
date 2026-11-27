@@ -2497,7 +2497,7 @@ async def _search_tavily(query: str, api_key: str, client: httpx.AsyncClient) ->
     return out
 
 
-async def _search_google_pse(query: str, api_key: str, cx: str, client: httpx.AsyncClient) -> list[dict[str, str]]:
+async def _search_google_pse(query: str, api_key: str, cx: str, client: httpx.AsyncClient) -> list[dict[str, Any]]:
     resp = await client.get(
         "https://www.googleapis.com/customsearch/v1",
         params={"key": api_key, "cx": cx, "q": query, "num": 5},
@@ -2506,11 +2506,25 @@ async def _search_google_pse(query: str, api_key: str, cx: str, client: httpx.As
     if resp.status_code != 200:
         return []
     results = resp.json().get("items") or []
-    return [
-        {"url": str(r.get("link") or ""), "title": str(r.get("title") or ""), "snippet": str(r.get("snippet") or "")}
-        for r in results
-        if isinstance(r, dict)
-    ]
+    out: list[dict[str, Any]] = []
+    for r in results:
+        if not isinstance(r, dict):
+            continue
+        pm = r.get("pagemap") or {}
+        imgs = [
+            str(im.get("src"))
+            for im in (pm.get("cse_image") or pm.get("cse_thumbnail") or [])
+            if isinstance(im, dict) and isinstance(im.get("src"), str) and im["src"].startswith("http")
+        ][:4]
+        item: dict[str, Any] = {
+            "url": str(r.get("link") or ""),
+            "title": str(r.get("title") or ""),
+            "snippet": str(r.get("snippet") or ""),
+        }
+        if imgs:
+            item["images"] = imgs
+        out.append(item)
+    return out
 
 
 async def _fetch_pdf_text(url: str, client: httpx.AsyncClient, max_chars: int = 3000) -> str:
