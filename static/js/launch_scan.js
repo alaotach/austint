@@ -356,6 +356,27 @@
         collectorStatus[d.tool].status = "unavailable";
         collectorStatus[d.tool].reason = d.reason || "unavailable";
       }
+    } else if (type === "hit_evaluated" && d.discovered_value) {
+      const id = `${d.discovered_type || "node"}:${d.discovered_value}`;
+      const meta = d.metadata || {};
+      if (!st.nodes.some((n) => n.data?.id === id)) {
+        st.nodes.push({
+          data: {
+            id,
+            label: d.discovered_value,
+            type: d.discovered_type || "profile",
+            confidence: Number(d.child_confidence ?? d.resolver_score ?? 0.5),
+            depth: 1,
+            provenance: [`${d.tool || "collector"}:discovered`],
+            attributes: { ...meta, source_tool: d.tool || "", resolver_score: d.resolver_score },
+          },
+        });
+        const navRes = document.getElementById("nav-badge-results");
+        if (navRes) navRes.textContent = String(st.nodes.length);
+        const hdrNodes = document.getElementById("header-node-count");
+        if (hdrNodes) hdrNodes.textContent = String(st.nodes.length);
+        if (typeof window.onGraphUpdated === "function") window.onGraphUpdated();
+      }
     } else if (type === "planner_decision" && Number(d.token_usage || 0) > 0) {
       scanBudget.llmUsed += 1;
     } else if (type === "job_completed" || type === "job_failed" || type === "job_refused") {
@@ -378,10 +399,25 @@
         handleEvent(ev);
       } catch (_) {}
     };
-    activeEventSource.onerror = () => {
+    activeEventSource.onerror = async () => {
       if (activeEventSource) {
         activeEventSource.close();
         activeEventSource = null;
+      }
+      const jid = window.OSINT_STATE.jobId;
+      if (jid) {
+        try {
+          const sr = await fetch(`/api/investigate/${encodeURIComponent(jid)}`);
+          if (sr.ok) {
+            const st = await sr.json();
+            if (["completed", "failed", "refused", "stopped"].includes(st.status)) {
+              stopElapsedTimer();
+              document.getElementById("btn-stop-scan").disabled = true;
+              setSystemStatus(st.status === "completed" ? "completed" : "failed", st.status);
+              await refreshGraph(jid);
+            }
+          }
+        } catch (_) {}
       }
     };
   }
