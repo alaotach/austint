@@ -503,7 +503,7 @@ class OpenRouterClient(BaseClient):
 
 
 class G4FClient(BaseClient):
-    """Local gpt4free client targeting a specific non-captcha HTTP provider (default: Yqcloud)."""
+    """Local gpt4free client with automatic OpenAI-compatible fallback (EryzaLabs) on failure."""
 
     def __init__(
         self,
@@ -514,33 +514,88 @@ class G4FClient(BaseClient):
     ) -> None:
         super().__init__(call_budget=call_budget, timeout=timeout)
         _load_dotenv()
-        self.provider_name = provider_name or os.getenv("G4F_PROVIDER", "Yqcloud")
+        self.provider_name = provider_name or os.getenv("G4F_PROVIDER", "GithubCopilot")
         self.model = model or os.getenv("G4F_MODEL", "")
+        self.fallback_base_url = os.getenv(
+            "ERYZALABS_BASE_URL",
+            "https://llm.eryzalabs.cloud/v1/chat/completions",
+        )
+        self.fallback_api_key = os.getenv("ERYZALABS_API_KEY", "")
+        self.fallback_model = os.getenv("ERYZALABS_MODEL", "app-default")
+        self.fallback_vision_model = os.getenv(
+            "ERYZALABS_VISION_MODEL",
+            "nvidia/nemotron-3.5-super-vl-120b-a12b",
+        )
+
+    def _fallback_client(self, *, multimodal: bool = False) -> OpenRouterClient | None:
+        if not self.fallback_api_key:
+            return None
+        remaining = max(1, self.call_budget - self.calls_made)
+        return OpenRouterClient(
+            api_key=self.fallback_api_key,
+            model=self.fallback_vision_model if multimodal else self.fallback_model,
+            base_url=self.fallback_base_url,
+            call_budget=remaining,
+            timeout=self.timeout,
+        )
 
     def complete_json(self, system: str, user: str, max_tokens: int = 1000) -> dict[str, Any]:
-        import g4f
-        from g4f.client import Client
+        return self.complete_multimodal_json(system=system, user=user, image_urls=None, max_tokens=max_tokens)
 
+    def complete_multimodal_json(
+        self,
+        system: str,
+        user: str,
+        image_urls: list[str] | None = None,
+        max_tokens: int = 1000,
+    ) -> dict[str, Any]:
         self._check_budget()
-        prov = getattr(g4f.Provider, self.provider_name, None)
-        if prov is None:
-            raise ValueError(f"Unknown g4f provider: {self.provider_name}")
-        model_name = self.model or getattr(prov, "default_model", "") or "gpt-4"
-        g4f_client = Client(provider=prov)
-        resp = g4f_client.chat.completions.create(
-            model=model_name,
-            messages=[
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
+        if not image_urls:
+            try:
+                import g4f
+                from g4f.client import Client
+
+                prov = getattr(g4f.Provider, self.provider_name, None)
+                if prov is None:
+                    raise ValueError(f"Unknown g4f provider: {self.provider_name}")
+                model_name = self.model or getattr(prov, "default_model", "") or "gpt-4"
+                g4f_client = Client(provider=prov)
+                resp = g4f_client.chat.completions.create(
+                    model=model_name,
+                    messages=[
+                        {"role": "system", "content": system},
+                        {"role": "user", "content": user},
+                    ],
+                )
+                raw_text = str((resp.choices[0].message.content if resp.choices else "") or "")
+                usage = getattr(resp, "usage", None)
+                token_count = int(getattr(usage, "total_tokens", 0) or 0) if usage else 0
+                if token_count <= 0:
+                    token_count = max(1, (len(system) + len(user) + len(raw_text)) // 4)
+                self.last_tokens = token_count
+                return self._parse_payload(raw_text, token_count)
+            except Exception as exc:
+                fb = self._fallback_client(multimodal=False)
+                if fb is None:
+                    raise
+                logger.warning("g4f failed (%s); falling back to %s", exc, self.fallback_base_url)
+                res = fb.complete_json(system=system, user=user, max_tokens=max_tokens)
+                self.calls_made += 1
+                self.last_tokens = int(res.get("_token_usage", 0))
+                return res
+
+        fb = self._fallback_client(multimodal=True)
+        if fb is None:
+            return self.complete_json(system=system, user=user, max_tokens=max_tokens)
+        res = fb.complete_multimodal_json(
+            system=system,
+            user=user,
+            image_urls=image_urls,
+            max_tokens=max_tokens,
         )
-        raw_text = str((resp.choices[0].message.content if resp.choices else "") or "")
-        usage = getattr(resp, "usage", None)
-        token_count = int(getattr(usage, "total_tokens", 0) or 0) if usage else 0
-        if token_count <= 0:
-            token_count = max(1, (len(system) + len(user) + len(raw_text)) // 4)
-        self.last_tokens = token_count
-        return self._parse_payload(raw_text, token_count)
+        self.calls_made += 1
+        self.last_tokens = int(res.get("_token_usage", 0))
+        return res
 
 
 def get_llm_client(provider: str | None = None, call_budget: int = 20) -> LLMClient:

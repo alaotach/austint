@@ -132,3 +132,31 @@ def test_select_live_llm_provider_g4f(monkeypatch):
     assert select_live_llm_provider() == "g4f"
     cli = get_llm_client("g4f", call_budget=5)
     assert isinstance(cli, G4FClient)
+
+
+
+def test_g4f_client_eryzalabs_fallback(monkeypatch):
+    import httpx
+    import respx
+    from osint_agent.llm.client import G4FClient
+
+    monkeypatch.setenv("ERYZALABS_BASE_URL", "https://llm.eryzalabs.cloud/v1/chat/completions")
+    monkeypatch.setenv("ERYZALABS_API_KEY", "test-key")
+    monkeypatch.setenv("ERYZALABS_MODEL", "app-default")
+    monkeypatch.setenv("ERYZALABS_VISION_MODEL", "nvidia/nemotron-3.5-super-vl-120b-a12b")
+
+    with respx.mock:
+        respx.post("https://llm.eryzalabs.cloud/v1/chat/completions").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "choices": [{"message": {"content": '{"match_probability": 0.88, "rationale": "fb"}'}}],
+                    "usage": {"total_tokens": 42},
+                },
+            )
+        )
+
+        cli = G4FClient(provider_name="MissingProviderTriggerFallback", call_budget=5)
+        out = cli.complete_json("sys", "usr")
+        assert out["match_probability"] == 0.88
+        assert out["_token_usage"] == 42
