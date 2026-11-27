@@ -302,16 +302,30 @@ async def _run_investigation_job(job: JobState, req: InvestigateRequest) -> None
 
     # 2. Configure Resolver
     if req.resolver in ("learned", "neural", "neural_gnn"):
-        model_path = Path(req.model_path)
+        if req.model_path == "models/model.joblib":
+            default_map = {
+                "neural_gnn": "models/neural_gnn_resolver.pt",
+                "neural": "models/neural_resolver.pt",
+                "learned": "models/model.joblib",
+            }
+            model_path = Path(default_map[req.resolver])
+        else:
+            model_path = Path(req.model_path)
         if model_path.exists():
-            if req.resolver == "neural_gnn":
-                from osint_agent.ml.gnn import NeuralGNNResolver
-                resolver = NeuralGNNResolver.load(model_path)
-            elif req.resolver == "neural":
-                from osint_agent.ml.neural import NeuralResolver
-                resolver = NeuralResolver.load(model_path)
-            else:
-                resolver = LearnedResolver.load(model_path)
+            try:
+                if req.resolver == "neural_gnn":
+                    from osint_agent.ml.gnn import NeuralGNNResolver
+
+                    resolver = NeuralGNNResolver.load(model_path)
+                elif req.resolver == "neural":
+                    from osint_agent.ml.neural import NeuralResolver
+
+                    resolver = NeuralResolver.load(model_path)
+                else:
+                    resolver = LearnedResolver.load(model_path)
+            except Exception as exc:
+                job.append_event("model_load_failed_fallback", {"path": str(model_path), "error": str(exc)})
+                resolver = BaselineWeightedResolver()
         else:
             job.append_event("model_not_found_fallback", {"path": str(model_path), "action": "fallback_baseline"})
             resolver = BaselineWeightedResolver()
