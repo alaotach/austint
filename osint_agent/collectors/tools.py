@@ -2467,7 +2467,8 @@ async def collect_exa_search(entity: Entity, client: httpx.AsyncClient) -> list[
     if not val or len(val) < 2:
         return []
 
-    _load_dotenv()
+    if not os.getenv("PYTEST_CURRENT_TEST"):
+        _load_dotenv()
     brave_key = os.getenv("BRAVE_SEARCH_API_KEY", "").strip()
     tavily_key = os.getenv("TAVILY_API_KEY", "").strip()
     google_key = os.getenv("GOOGLE_PSE_API_KEY", "").strip()

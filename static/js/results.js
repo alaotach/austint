@@ -222,6 +222,94 @@
     `;
   }
 
+  function buildDossierHtml(allNodes) {
+    const names = new Set();
+    const emails = new Set();
+    const phones = new Set();
+    const locations = new Set();
+    const orgs = new Set();
+    const websites = new Set();
+    const photos = new Set();
+
+    const addStr = (set, v) => {
+      const s = String(v || "").trim();
+      if (s && s.length < 220) set.add(s);
+    };
+
+    allNodes.forEach((n) => {
+      const d = n.data || {};
+      const a = d.attributes || {};
+      const ef = a.extra_fields || {};
+      if (d.type === "email") addStr(emails, d.label);
+      if (d.type === "org") addStr(orgs, d.label);
+      if (d.type === "domain") addStr(websites, d.label);
+      [a.name, a.display_name, ef.legal_name].forEach((x) => addStr(names, x));
+      [a.email, a.developer_email, a.support_email, ef.developer_email, ef.support_email].forEach((x) => addStr(emails, x));
+      (a.contact_emails || []).forEach((x) => addStr(emails, x));
+      (a.phone_numbers || []).forEach((x) => addStr(phones, x));
+      [a.location, a.office_address, ef.office_address, a.country].forEach((x) => addStr(locations, x));
+      [a.company, a.developer_name, ef.developer_name].forEach((x) => addStr(orgs, x));
+      (a.orgs || []).forEach((x) => addStr(orgs, x));
+      if (typeof a.website === "string" && a.website.startsWith("http")) addStr(websites, a.website);
+      [a.avatar_url, a.avatar].forEach((u) => {
+        if (typeof u === "string" && u.startsWith("http")) photos.add(u);
+      });
+      (a.images || []).forEach((u) => {
+        if (typeof u === "string" && u.startsWith("http")) photos.add(u);
+      });
+    });
+
+    const photoList = Array.from(photos);
+    const primaryPhoto = photoList[0] || "";
+    const row = (label, set, isLink) => {
+      const arr = Array.from(set).slice(0, 6);
+      if (!arr.length) return "";
+      const vals = arr.map((v) => isLink
+        ? `<a href="${esc(v.startsWith("http") ? v : "https://" + v)}" target="_blank" rel="noopener noreferrer" style="color:var(--accent);">${esc(v)}</a>`
+        : esc(v)
+      ).join("<br>");
+      return `
+        <div style="padding:8px 0; border-bottom:1px solid var(--border-subtle);">
+          <div class="field-label" style="font-size:10px; margin-bottom:2px;">${esc(label)}</div>
+          <div class="mono" style="font-size:12px; word-break:break-word;">${vals}</div>
+        </div>
+      `;
+    };
+
+    const hasAny = names.size || emails.size || phones.size || locations.size || orgs.size || websites.size || photoList.length;
+    if (!hasAny) return "";
+
+    return `
+      <aside class="card" style="position:sticky; top:76px; align-self:start;">
+        <div style="display:flex; align-items:center; gap:12px; margin-bottom:10px;">
+          ${primaryPhoto ? `<a href="${esc(primaryPhoto)}" target="_blank" rel="noopener noreferrer"><img src="${esc(primaryPhoto)}" alt="" onerror="this.style.display='none'" style="width:52px; height:52px; border-radius:50%; object-fit:cover; border:1px solid var(--border-strong);"></a>` : ""}
+          <div>
+            <div class="field-label">Subject Identity Dossier</div>
+            <div style="font-weight:700; font-size:15px;">${esc(Array.from(names)[0] || "Aggregated Target Intel")}</div>
+          </div>
+        </div>
+        ${row("Names & Aliases", names, false)}
+        ${row("Emails", emails, false)}
+        ${row("Phone Numbers", phones, false)}
+        ${row("Locations & Addresses", locations, false)}
+        ${row("Organizations", orgs, false)}
+        ${row("Domains & Websites", websites, true)}
+        ${photoList.length > 1 ? `
+          <div style="padding-top:8px;">
+            <div class="field-label" style="font-size:10px; margin-bottom:6px;">Collected Photos (${photoList.length})</div>
+            <div style="display:flex; flex-wrap:wrap; gap:6px;">
+              ${photoList.slice(0, 8).map((u) => `
+                <a href="${esc(u)}" target="_blank" rel="noopener noreferrer" title="${esc(u)}">
+                  <img src="${esc(u)}" alt="" loading="lazy" onerror="this.parentElement.style.display='none'" style="width:42px; height:42px; border-radius:4px; object-fit:cover; border:1px solid var(--border-subtle);">
+                </a>
+              `).join("")}
+            </div>
+          </div>
+        ` : ""}
+      </aside>
+    `;
+  }
+
   function renderResultsView() {
     const container = document.getElementById("results-container");
     if (!container) return;
@@ -242,6 +330,7 @@
     });
 
     const visible = filtered.slice(0, visibleLimit);
+    const dossierHtml = buildDossierHtml(allNodes);
 
     container.innerHTML = `
       <div class="card" style="display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:var(--space-3);">
@@ -255,17 +344,22 @@
         </div>
       </div>
 
-      ${visible.length ? `
-        <div class="grid-3" id="results-cards-grid">
-          ${visible.map((n, i) => renderResultCard(n, i)).join("")}
+      <div style="display:grid; grid-template-columns:${dossierHtml ? "minmax(260px, 310px) 1fr" : "1fr"}; gap:var(--space-4); align-items:start;">
+        ${dossierHtml}
+        <div>
+          ${visible.length ? `
+            <div class="grid-3" id="results-cards-grid">
+              ${visible.map((n, i) => renderResultCard(n, i)).join("")}
+            </div>
+            ${filtered.length > visibleLimit ? `
+              <div class="state-panel" style="display:flex; align-items:center; justify-content:center; gap:12px; flex-wrap:wrap;">
+                <span>Windowed DOM (${visible.length} of ${filtered.length} cards rendered for 60fps performance)</span>
+                <button type="button" class="btn btn-sm btn-primary" id="btn-load-more-cards">Load +100 Cards</button>
+              </div>
+            ` : ""}
+          ` : `<div class="state-panel">No entities match the current filter. Run a scan or click "Load Recorded Run" on Launch.</div>`}
         </div>
-        ${filtered.length > visibleLimit ? `
-          <div class="state-panel" style="display:flex; align-items:center; justify-content:center; gap:12px; flex-wrap:wrap;">
-            <span>Windowed DOM (${visible.length} of ${filtered.length} cards rendered for 60fps performance)</span>
-            <button type="button" class="btn btn-sm btn-primary" id="btn-load-more-cards">Load +100 Cards</button>
-          </div>
-        ` : ""}
-      ` : `<div class="state-panel">No entities match the current filter. Run a scan or click "Load Recorded Run" on Launch.</div>`}
+      </div>
     `;
 
     document.getElementById("btn-load-more-cards")?.addEventListener("click", () => {

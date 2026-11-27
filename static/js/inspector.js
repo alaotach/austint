@@ -65,8 +65,13 @@
       const conf = Number(d.confidence ?? 0.5);
       const cov = d.field_coverage || { extracted_count: 0, expected_count: 0, missing_fields: [] };
       const kvRows = Object.entries(attrs)
-        .filter(([k]) => !["resolver_features", "hand_features", "phone", "phones", "breach", "stealer_family"].includes(k))
-        .slice(0, 12);
+        .filter(([k]) => !["resolver_features", "hand_features", "phone", "phones", "breach", "stealer_family", "images", "avatar_url", "avatar", "banner_url", "banner"].includes(k))
+        .slice(0, 14);
+      const imgs = Array.from(new Set([
+        ...(attrs.avatar_url ? [attrs.avatar_url] : []),
+        ...(attrs.avatar ? [attrs.avatar] : []),
+        ...(Array.isArray(attrs.images) ? attrs.images : []),
+      ].filter((u) => typeof u === "string" && u.startsWith("http"))));
       tabContent = `
         <div class="grid-2" style="margin-bottom: var(--space-4);">
           <div class="card">
@@ -78,14 +83,30 @@
             <div class="kpi-value">${cov.extracted_count ?? 0} / ${cov.expected_count ?? 0}</div>
           </div>
         </div>
+        ${imgs.length ? `
+          <div class="card" style="margin-bottom: var(--space-3);">
+            <div class="field-label" style="margin-bottom:8px;">Images &amp; Media (${imgs.length})</div>
+            <div style="display:flex; flex-wrap:wrap; gap:8px;">
+              ${imgs.slice(0, 10).map((u) => `
+                <a href="${esc(u)}" target="_blank" rel="noopener noreferrer" title="${esc(u)}" style="display:inline-block; border:1px solid var(--border-strong); border-radius:6px; overflow:hidden; background:var(--bg-elevated);">
+                  <img src="${esc(u)}" alt="" loading="lazy" onerror="this.parentElement.style.display='none'" style="width:64px; height:64px; object-fit:cover; display:block;">
+                </a>
+              `).join("")}
+            </div>
+          </div>
+        ` : ""}
         <div class="card" style="margin-bottom: var(--space-3);">
           <div class="field-label" style="margin-bottom:8px;">Extracted Public Fields</div>
-          ${kvRows.length ? kvRows.map(([k, v]) => `
+          ${kvRows.length ? kvRows.map(([k, v]) => {
+            const valHtml = typeof v === "string" && /^https?:\/\//i.test(v)
+              ? `<a href="${esc(v)}" target="_blank" rel="noopener noreferrer" style="color:var(--accent);">${esc(v)}</a>`
+              : esc(typeof v === "object" ? JSON.stringify(v) : v);
+            return `
             <div class="mono" style="font-size:12px; display:flex; justify-content:space-between; gap:8px; padding:4px 0; border-bottom:1px solid var(--border-subtle);">
               <span style="color:var(--text-muted);">${esc(k)}</span>
-              <span style="text-align:right; word-break:break-word; max-width:65%;">${esc(typeof v === "object" ? JSON.stringify(v) : v)}</span>
-            </div>
-          `).join("") : `<div class="state-panel">Sparse node: no additional public fields.</div>`}
+              <span style="text-align:right; word-break:break-word; max-width:65%;">${valHtml}</span>
+            </div>`;
+          }).join("") : `<div class="state-panel">Sparse node: no additional public fields.</div>`}
         </div>
       `;
     } else if (activeTab === "evidence") {

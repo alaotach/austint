@@ -1886,7 +1886,7 @@ async def test_tool_exa_search_returns_hits_and_never_retries_on_402() -> None:
         )
 
         entity = Entity.create(entity_type=EntityType.USERNAME, value="alaotach")
-        with patch.dict("os.environ", {"EXA_API_KEY": "test-exa-key"}):
+        with patch.dict("os.environ", {"EXA_API_KEY": "test-exa-key", "TAVILY_API_KEY": "", "BRAVE_SEARCH_API_KEY": "", "GOOGLE_PSE_API_KEY": ""}):
             async with httpx.AsyncClient() as client:
                 hits = await collect_exa_search(entity, client)
 
@@ -1904,7 +1904,7 @@ async def test_tool_exa_search_returns_hits_and_never_retries_on_402() -> None:
             return httpx.Response(402, json={"error": "Payment Required"})
 
         respx.post("https://ai.hackclub.com/proxy/v1/exa/search").mock(side_effect=side_effect_402)
-        with patch.dict("os.environ", {"EXA_API_KEY": "test-exa-key"}):
+        with patch.dict("os.environ", {"EXA_API_KEY": "test-exa-key", "TAVILY_API_KEY": "", "BRAVE_SEARCH_API_KEY": "", "GOOGLE_PSE_API_KEY": ""}):
             async with httpx.AsyncClient() as client:
                 hits_402 = await collect_exa_search(entity, client)
                 hits_after = await collect_exa_search(entity, client)
@@ -2035,7 +2035,7 @@ async def test_image_intel_vision_and_web_search_with_avatar_match() -> None:
         return_value=httpx.Response(200, content=img_bytes)
     )
 
-    with patch.dict("os.environ", {"EXA_API_KEY": "test-exa-key"}):
+    with patch.dict("os.environ", {"EXA_API_KEY": "test-exa-key", "TAVILY_API_KEY": "", "BRAVE_SEARCH_API_KEY": "", "GOOGLE_PSE_API_KEY": ""}):
         async with httpx.AsyncClient() as client:
             res = await search_image_web(
                 image_bytes=img_bytes,
@@ -2122,3 +2122,35 @@ async def test_reverse_image_search_yandex_parses_cbir_sites() -> None:
     assert hits[0].metadata["title"] == "adityachechani (Aditya Chechani) - GitHub"
     assert hits[0].metadata["thumbnail_url"] == "https://avatars.mds.yandex.net/i?id=123"
     assert hits[0].metadata["visual_similarity"] >= 0.72
+
+
+
+def test_lead_filtering_skips_noise_and_extracts_org_email_domain():
+    from osint_agent.core.agent import _extract_child_leads
+    from osint_agent.core.schema import Entity, EntityType, Hit
+
+    parent = Entity.create(entity_type=EntityType.PROFILE, value="https://play.google.com/store/apps/dev", confidence=0.9, depth=1)
+    hit = Hit(
+        target_entity_id="u1",
+        discovered_type=EntityType.PROFILE,
+        discovered_value="https://play.google.com/store/apps/dev",
+        relation="account_on",
+        source_tool="playstore_intel",
+        raw_data={"description": "Contact user@example.com actions@github.com u003eaccountrecovery@deviantart.com https://itch.io/u https://eryzalabs.com"},
+        metadata={
+            "developer_name": "AlAoTach Inc.",
+            "developer_email": "aryanmi2001@gmail.com",
+            "support_email": "eryzalabs@gmail.com",
+            "website": "https://eryzalabs.cloud",
+        },
+    )
+    leads = _extract_child_leads(hit, parent)
+    vals = {(l.entity_type.value, l.value.lower()) for l in leads}
+    assert ("email", "aryanmi2001@gmail.com") in vals
+    assert ("email", "eryzalabs@gmail.com") in vals
+    assert ("domain", "eryzalabs.com") in vals
+    assert ("domain", "eryzalabs.cloud") in vals
+    assert ("org", "alaotach inc.") in vals
+    assert ("email", "user@example.com") not in vals
+    assert ("email", "actions@github.com") not in vals
+    assert ("domain", "itch.io") not in vals

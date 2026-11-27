@@ -25,6 +25,168 @@ from osint_agent.collectors.tools import TOOL_REGISTRY, set_audit_callback
 logger = logging.getLogger(__name__)
 
 
+_NOISE_EMAIL_DOMAINS = {
+    "example.com",
+    "example.org",
+    "example.net",
+    "test.com",
+    "localhost",
+    "users.noreply.github.com",
+    "noreply.github.com",
+    "deviantart.com",
+    "sentry.io",
+    "w3.org",
+}
+_NOISE_EMAIL_PREFIXES = (
+    "noreply",
+    "no-reply",
+    "donotreply",
+    "do-not-reply",
+    "accountrecovery",
+    "u003e",
+    "actions@github.com",
+)
+_THIRD_PARTY_PLATFORM_DOMAINS = {
+    "github.com",
+    "gitlab.com",
+    "itch.io",
+    "sketchfab.com",
+    "themoviedb.org",
+    "tradingview.com",
+    "deviantart.com",
+    "gmail.com",
+    "yahoo.com",
+    "outlook.com",
+    "hotmail.com",
+    "proton.me",
+    "protonmail.com",
+    "example.com",
+    "example.org",
+    "example.net",
+    "termsfeed.com",
+    "stackblitz.com",
+    "audio.com",
+    "play.google.com",
+    "developer.android.com",
+    "doc-hosting.flycricket.io",
+    "flycricket.io",
+    "youtube.com",
+    "youtu.be",
+    "instagram.com",
+    "facebook.com",
+    "x.com",
+    "twitter.com",
+    "linkedin.com",
+    "reddit.com",
+    "medium.com",
+    "dev.to",
+    "huggingface.co",
+    "pypi.org",
+    "npmjs.com",
+    "kaggle.com",
+    "wattpad.com",
+    "chess.com",
+    "codeforces.com",
+    "leetcode.com",
+    "soundcloud.com",
+    "steamcommunity.com",
+    "twitch.tv",
+    "pinterest.com",
+    "t.me",
+    "telegram.org",
+    "hub.docker.com",
+    "docker.com",
+    "vercel.app",
+    "netlify.app",
+    "github.io",
+    "blogspot.com",
+    "wordpress.com",
+    "linktr.ee",
+    "gravatar.com",
+    "googleusercontent.com",
+    "play-lh.googleusercontent.com",
+    "w3.org",
+    "schema.org",
+}
+
+
+def _is_valid_lead(lead: Entity) -> bool:
+    """Filter out placeholder emails, escaped-HTML junk, and major third-party hosting domains."""
+    val = str(lead.value or "").strip().lower()
+    if not val:
+        return False
+    if lead.entity_type == EntityType.EMAIL:
+        if val in _NOISE_EMAIL_PREFIXES or any(val.startswith(p) for p in _NOISE_EMAIL_PREFIXES):
+            return False
+        if "@" not in val:
+            return False
+        dom = val.rsplit("@", 1)[-1]
+        if dom in _NOISE_EMAIL_DOMAINS:
+            return False
+        return True
+    if lead.entity_type == EntityType.DOMAIN:
+        dom = val.lstrip("www.")
+        if dom in _THIRD_PARTY_PLATFORM_DOMAINS:
+            return False
+        if any(dom.endswith("." + p) for p in _THIRD_PARTY_PLATFORM_DOMAINS):
+            return False
+        if dom.startswith("com.") and dom.count(".") == 1:
+            return False
+        return True
+    return True
+
+
+def _extract_child_leads(hit: Hit, child_entity: Entity) -> list[Entity]:
+    """Extract clean email, domain, and org leads from hit text and structured metadata."""
+    hit_text = (
+        hit.raw_data.get("description")
+        or hit.metadata.get("bio")
+        or hit.metadata.get("description")
+        or ""
+    )
+    extra_lead_chunks: list[str] = [hit_text] if hit_text else []
+    for em in (hit.metadata.get("contact_emails") or []):
+        if isinstance(em, str) and "@" in em:
+            extra_lead_chunks.append(em)
+    for ek in ("email", "developer_email", "support_email"):
+        ev = hit.metadata.get(ek)
+        if isinstance(ev, str) and "@" in ev:
+            extra_lead_chunks.append(ev)
+    if isinstance(hit.metadata.get("website"), str) and hit.metadata["website"].startswith("http"):
+        extra_lead_chunks.append(hit.metadata["website"])
+
+    leads: list[Entity] = []
+    combined_lead_text = " ".join(extra_lead_chunks).strip()
+    if combined_lead_text:
+        for lead in extract_entities(combined_lead_text):
+            if _is_valid_lead(lead):
+                leads.append(lead)
+
+    org_candidates: list[str] = []
+    for ok in ("company", "developer_name"):
+        ov = str(hit.metadata.get(ok) or "").strip()
+        if ov and len(ov) >= 2:
+            org_candidates.append(ov)
+    for ov in (hit.metadata.get("orgs") or []):
+        s = str(ov).strip()
+        if s and len(s) >= 2:
+            org_candidates.append(s)
+    seen_orgs = {l.value.lower() for l in leads if l.entity_type == EntityType.ORG}
+    for org_val in org_candidates:
+        if org_val.lower() not in seen_orgs:
+            seen_orgs.add(org_val.lower())
+            leads.append(
+                Entity.create(
+                    entity_type=EntityType.ORG,
+                    value=org_val,
+                    confidence=child_entity.confidence,
+                    depth=child_entity.depth + 1,
+                    provenance=child_entity.provenance + ["extracted:org"],
+                )
+            )
+    return leads
+
+
 class OSINTAgent:
     """Autonomous OSINT investigator performing depth-bounded, confidence-decayed expansion."""
 
@@ -340,23 +502,8 @@ class OSINTAgent:
                             )
 
                         # 4. Extract entities from confirmed hit's text AND structured metadata
-                        hit_text = (
-                            hit.raw_data.get("description")
-                            or hit.metadata.get("bio")
-                            or hit.metadata.get("description")
-                            or ""
-                        )
-                        extra_lead_chunks: list[str] = [hit_text] if hit_text else []
-                        for em in (hit.metadata.get("contact_emails") or []):
-                            if isinstance(em, str) and "@" in em:
-                                extra_lead_chunks.append(em)
-                        if isinstance(hit.metadata.get("email"), str) and "@" in hit.metadata["email"]:
-                            extra_lead_chunks.append(hit.metadata["email"])
-                        if isinstance(hit.metadata.get("website"), str) and hit.metadata["website"].startswith("http"):
-                            extra_lead_chunks.append(hit.metadata["website"])
-                        combined_lead_text = " ".join(extra_lead_chunks).strip()
-                        if combined_lead_text:
-                            extracted_leads = extract_entities(combined_lead_text)
+                        extracted_leads = _extract_child_leads(hit, child_entity)
+                        if extracted_leads:
                             for lead in extracted_leads:
                                 lead_conf = round(child_entity.confidence * scope.confidence_decay, 4)
                                 if lead_conf >= scope.min_confidence:
@@ -376,6 +523,20 @@ class OSINTAgent:
                                             depth=lead_entity.depth,
                                             provenance=list(lead_entity.provenance),
                                         )
+                                        if (
+                                            lead_entity.entity_type in (EntityType.EMAIL, EntityType.ORG, EntityType.DOMAIN)
+                                            and lead_entity.id not in visited_entity_ids
+                                            and lead_entity.depth < scope.max_depth
+                                        ):
+                                            heapq.heappush(
+                                                pq,
+                                                (
+                                                    -lead_entity.confidence,
+                                                    lead_entity.depth,
+                                                    next(counter),
+                                                    lead_entity,
+                                                ),
+                                            )
                                     else:
                                         existing_conf = graph.nodes[lead_entity.id].get("confidence", 0.0)
                                         if lead_entity.confidence > existing_conf:

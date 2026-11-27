@@ -1196,6 +1196,10 @@ async def analyze_profile_hit(hit: Hit, client: httpx.AsyncClient) -> dict[str, 
         hit.metadata["avatar_url"] = av
     if info.get("images"):
         hit.metadata["images"] = info["images"]
+        if not hit.metadata.get("avatar_url"):
+            first_img = next((str(u).strip() for u in info["images"] if isinstance(u, str) and u.strip().startswith("http")), "")
+            if first_img:
+                hit.metadata["avatar_url"] = first_img
     if info.get("extra_fields"):
         hit.metadata["extra_fields"] = info["extra_fields"]
         for ek, ev in info["extra_fields"].items():
