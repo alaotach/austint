@@ -115,6 +115,10 @@ class NormalizedProfile(BaseModel):
                 out["website"] = self.extra["website"]
             if self.extra.get("stories"):
                 out["stories"] = self.extra["stories"]
+            if self.extra.get("rating") is not None:
+                out["rating"] = self.extra["rating"]
+            if self.extra.get("rank"):
+                out["rank"] = self.extra["rank"]
         if self.limited_public_data:
             out["limited_public_data"] = True
             out["status_note"] = self.status_note or "exists, limited public data"
@@ -152,7 +156,7 @@ async def extract_dockerhub(url: str, username: str, client: httpx.AsyncClient) 
             prof.set_field("display_name", d.get("full_name") or d.get("username"), "api")
             prof.set_field("location", d.get("location"), "api")
             prof.set_field("joined_at", str(d.get("date_joined") or "")[:10], "api")
-            prof.set_field("avatar_url", d.get("gravatar_url"), "api")
+            prof.set_field("avatar_url", d.get("avatar_url") or d.get("gravatar_url"), "api")
             if d.get("company"):
                 prof.extra["company"] = d["company"]
             if d.get("profile_url"):
@@ -322,10 +326,16 @@ async def extract_codeforces(url: str, username: str, client: httpx.AsyncClient)
             if u.get("rating") is not None:
                 prof.extra["rating"] = u["rating"]
                 prof.extra["rank"] = u.get("rank")
+            if u.get("friendOfCount") is not None:
+                prof.set_field("followers", int(u["friendOfCount"]), "api")
             if u.get("registrationTimeSeconds"):
                 from datetime import datetime, timezone
 
                 prof.set_field("joined_at", datetime.fromtimestamp(int(u["registrationTimeSeconds"]), tz=timezone.utc).strftime("%Y-%m-%d"), "api")
+            if u.get("lastOnlineTimeSeconds"):
+                from datetime import datetime, timezone
+
+                prof.set_field("last_active", datetime.fromtimestamp(int(u["lastOnlineTimeSeconds"]), tz=timezone.utc).strftime("%Y-%m-%d"), "api")
     except Exception:
         pass
     return prof
@@ -405,6 +415,21 @@ async def extract_steam(url: str, username: str, client: httpx.AsyncClient) -> N
     return prof
 
 
+def _extract_og_meta(html: str, prop: str) -> str:
+    m = re.search(
+        rf'<meta[^>]+property=["\']{re.escape(prop)}["\'][^>]+content=["\']([^"\']*)["\']',
+        html,
+        re.I,
+    )
+    if not m:
+        m = re.search(
+            rf'<meta[^>]+content=["\']([^"\']*)["\'][^>]+property=["\']{re.escape(prop)}["\']',
+            html,
+            re.I,
+        )
+    return unescape(m.group(1)).strip() if m else ""
+
+
 @register_extractor("telegram")
 async def extract_telegram(url: str, username: str, client: httpx.AsyncClient) -> NormalizedProfile:
     prof = NormalizedProfile(username=username)
@@ -418,10 +443,16 @@ async def extract_telegram(url: str, username: str, client: httpx.AsyncClient) -
             im = re.search(r'<img[^>]*class="tgme_page_photo_image"[^>]*src="([^"]+)"', html, re.I)
             if tm:
                 prof.set_field("display_name", unescape(re.sub(r"<[^>]+>", "", tm.group(1))).strip(), "structured")
+            if not prof.display_name:
+                prof.set_field("display_name", _extract_og_meta(html, "og:title"), "structured")
             if dm:
                 prof.set_field("bio", unescape(re.sub(r"<[^>]+>", " ", dm.group(1))).strip()[:400], "structured")
+            if not prof.bio:
+                prof.set_field("bio", _extract_og_meta(html, "og:description")[:400], "structured")
             if im:
                 prof.set_field("avatar_url", im.group(1), "structured")
+            if not prof.avatar_url:
+                prof.set_field("avatar_url", _extract_og_meta(html, "og:image"), "structured")
             if em:
                 extra_txt = unescape(re.sub(r"<[^>]+>", " ", em.group(1))).strip()
                 sub_m = re.search(r"([\d\s]+)\s+(?:subscribers|members)", extra_txt, re.I)

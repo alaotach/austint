@@ -291,3 +291,76 @@ async def test_newly_added_platform_extractors_github_devto_hf_wattpad_kaggle_it
     assert kg.followers == 9 and kg.joined_at == "2022-03-01"
     assert it.post_count == {"games": 1}
     assert yt.followers == 500 and yt.post_count == {"videos": 12} and yt.total_views == 9000
+
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_codeforces_telegram_og_and_dockerhub_extractors():
+    from osint_agent.collectors.extractors import EXTRACTOR_REGISTRY
+
+    respx.get("https://codeforces.com/api/user.info?handles=alaotach").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "status": "OK",
+                "result": [
+                    {
+                        "handle": "alaotach",
+                        "firstName": "Al",
+                        "lastName": "Ao",
+                        "country": "India",
+                        "city": "Delhi",
+                        "organization": "IIIT",
+                        "rating": 1650,
+                        "rank": "expert",
+                        "friendOfCount": 12,
+                        "registrationTimeSeconds": 1719413178,
+                        "lastOnlineTimeSeconds": 1793026018,
+                        "titlePhoto": "https://userpic.codeforces.org/4037892/title/e685a584cb334908.jpg",
+                    }
+                ],
+            },
+        )
+    )
+    respx.get("https://t.me/mrmango42").mock(
+        return_value=httpx.Response(
+            200,
+            text=(
+                '<meta property="og:title" content="AlAoTach">'
+                '<meta property="og:image" content="https://telegram.org/img/t_logo_2x.png">'
+                '<meta property="og:description" content="You can contact @mrmango42 right away.">'
+            ),
+        )
+    )
+    respx.get("https://hub.docker.com/v2/users/alaotach/").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "username": "alaotach",
+                "full_name": "AlAoTach",
+                "location": "Bengaluru",
+                "company": "OpenLab",
+                "date_joined": "2025-01-31T19:21:00.227306Z",
+                "gravatar_url": "https://www.gravatar.com/avatar/abc",
+                "profile_url": "https://example.org",
+            },
+        )
+    )
+    respx.get("https://hub.docker.com/v2/repositories/alaotach/?page_size=10").mock(
+        return_value=httpx.Response(200, json={"count": 4})
+    )
+
+    async with httpx.AsyncClient() as client:
+        cf = (await EXTRACTOR_REGISTRY["codeforces"]("https://codeforces.com/profile/alaotach", "alaotach", client)).to_metadata_dict()
+        tg = (await EXTRACTOR_REGISTRY["telegram"]("https://t.me/mrmango42", "mrmango42", client)).to_metadata_dict()
+        dh = (await EXTRACTOR_REGISTRY["dockerhub"]("https://hub.docker.com/u/alaotach", "alaotach", client)).to_metadata_dict()
+
+    assert cf["rating"] == 1650 and cf["rank"] == "expert"
+    assert cf["country"] == "India" and cf["orgs"] == ["IIIT"]
+    assert cf["joined"] == "2024-06-26" and cf["followers"] == 12 and cf["activity_dates"] == "2026-10-26"
+    assert tg["name"] == "AlAoTach"
+    assert tg["bio"] == "You can contact @mrmango42 right away."
+    assert tg["avatar_url"] == "https://telegram.org/img/t_logo_2x.png"
+    assert dh["location"] == "Bengaluru" and dh["company"] == "OpenLab"
+    assert dh["avatar_url"] == "https://www.gravatar.com/avatar/abc" and dh["repos"] == 4

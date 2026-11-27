@@ -60,6 +60,8 @@ REAL_PROFILE_FIELDS = {
     "orgs",
     "languages",
     "ratings",
+    "rating",
+    "rank",
     "company",
 }
 
