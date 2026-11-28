@@ -5,7 +5,7 @@
   align-items: center;
   justify-content: center;
   gap: var(--space-2);
-  padding: var(--space-2) var(--space-3);
+  padding: 7px var(--space-3);
   border-radius: var(--radius-sm);
   border: 1px solid var(--border-strong);
   background: var(--bg-elevated);
@@ -14,14 +14,19 @@
   font-size: 12px;
   font-weight: 600;
   cursor: pointer;
-  transition: background 0.15s ease, border-color 0.15s ease;
+  transition: background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out), transform 100ms var(--ease-out);
   text-decoration: none;
   white-space: nowrap;
+  user-select: none;
 }
 
 .btn:hover:not(:disabled) {
   background: var(--bg-hover);
   border-color: var(--accent);
+}
+
+.btn:active:not(:disabled) {
+  transform: scale(0.98);
 }
 
 .btn:disabled {
@@ -101,7 +106,8 @@
   min-width: 0;
   max-width: 100%;
   overflow: hidden;
-  transition: border-color 0.15s ease;
+  box-shadow: var(--inner-highlight), var(--shadow-card);
+  transition: border-color var(--dur-fast) var(--ease-out), transform var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out);
 }
 
 .card-interactive {
@@ -110,12 +116,56 @@
 
 .card-interactive:hover,
 .card-interactive:focus-within {
-  border-color: var(--accent);
+  border-color: var(--border-strong);
+  transform: translateY(-1px);
 }
 
 .card-interactive.is-selected {
   border-color: var(--accent);
-  box-shadow: 0 0 0 1px var(--accent);
+  box-shadow: 0 0 0 1px var(--accent), var(--shadow-card);
+}
+
+/* Wikipedia-style superscript citations & target highlight */
+.cite-ref {
+  font-size: 10px;
+  line-height: 0;
+  vertical-align: super;
+  margin-left: 2px;
+}
+
+.cite-link {
+  display: inline-block;
+  padding: 0 3px;
+  border-radius: 3px;
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-weight: 700;
+  text-decoration: none;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+
+.cite-link:hover {
+  background: var(--accent-soft);
+  text-decoration: underline;
+}
+
+@keyframes citePulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(56, 189, 248, 0.75);
+    border-color: var(--accent);
+  }
+  50% {
+    box-shadow: 0 0 0 6px rgba(56, 189, 248, 0.18);
+    border-color: var(--accent);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(56, 189, 248, 0);
+  }
+}
+
+.cite-target-pulse {
+  animation: citePulse 1.8s var(--ease-out) 1;
+  border-color: var(--accent) !important;
 }
 
 /* Tabs */

@@ -1,9 +1,14 @@
-/* Design Tokens: Intelligent OSINT (Dark default + Light toggle) */
+/* Design Tokens: Precision Obsidian Dark + Porcelain Light (Emil-inspired craft) */
 
 :root {
   /* Fonts */
   --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   --font-mono: "JetBrains Mono", "Fira Code", "SFMono-Regular", Consolas, monospace;
+
+  /* Motion */
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --dur-fast: 150ms;
+  --dur-med: 220ms;
 
   /* 4px Spacing Scale */
   --space-1: 4px;
@@ -16,76 +21,82 @@
   --space-10: 40px;
 
   /* Radii */
-  --radius-sm: 4px;
-  --radius-md: 8px;
-  --radius-lg: 12px;
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
   --radius-pill: 999px;
 
-  /* Dark Theme Surfaces (WCAG AA compliant) */
-  --bg-canvas: #090d14;
-  --bg-surface: #0f1623;
-  --bg-elevated: #161f30;
-  --bg-hover: #1d283d;
-  --bg-dot: rgba(148, 163, 184, 0.14);
+  /* Dark Theme Surfaces (Obsidian Zinc) */
+  --bg-canvas: #09090b;
+  --bg-surface: #111114;
+  --bg-surface-glass: rgba(17, 17, 20, 0.82);
+  --bg-elevated: #18181c;
+  --bg-hover: #222228;
+  --bg-dot: rgba(255, 255, 255, 0.045);
 
   /* Text */
-  --text-primary: #f1f5f9;
-  --text-secondary: #cbd5e1;
-  --text-muted: #94a3b8;
+  --text-primary: #fafafa;
+  --text-secondary: #d4d4d8;
+  --text-muted: #8b8b96;
 
-  /* Borders */
-  --border-subtle: #1e293b;
-  --border-strong: #334155;
+  /* Hairline Borders */
+  --border-subtle: rgba(255, 255, 255, 0.08);
+  --border-strong: rgba(255, 255, 255, 0.16);
+  --inner-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.04);
 
   /* Single Primary Accent */
   --accent: #38bdf8;
   --accent-strong: #0ea5e9;
-  --accent-soft: rgba(56, 189, 248, 0.14);
+  --accent-soft: rgba(56, 189, 248, 0.12);
   --accent-contrast: #04121f;
 
   /* Semantic Status Colors */
   --confirmed: #22c55e;
-  --confirmed-soft: rgba(34, 197, 94, 0.16);
+  --confirmed-soft: rgba(34, 197, 94, 0.14);
   --rejected: #ef4444;
-  --rejected-soft: rgba(239, 68, 68, 0.16);
+  --rejected-soft: rgba(239, 68, 68, 0.14);
   --uncertain: #f59e0b;
-  --uncertain-soft: rgba(245, 158, 11, 0.16);
+  --uncertain-soft: rgba(245, 158, 11, 0.14);
   --error: #f87171;
-  --error-soft: rgba(248, 113, 113, 0.16);
+  --error-soft: rgba(248, 113, 113, 0.14);
 
   /* Focus & Elevation */
-  --focus-ring: 0 0 0 2px #090d14, 0 0 0 4px #38bdf8;
-  --shadow-drawer: -8px 0 32px rgba(0, 0, 0, 0.55);
+  --focus-ring: 0 0 0 2px #09090b, 0 0 0 4px #38bdf8;
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.35), 0 8px 24px rgba(0, 0, 0, 0.22);
+  --shadow-drawer: -12px 0 40px rgba(0, 0, 0, 0.65);
 }
 
 [data-theme="light"] {
-  --bg-canvas: #f8fafc;
+  --bg-canvas: #fafafa;
   --bg-surface: #ffffff;
-  --bg-elevated: #f1f5f9;
-  --bg-hover: #e2e8f0;
-  --bg-dot: rgba(15, 23, 42, 0.1);
+  --bg-surface-glass: rgba(255, 255, 255, 0.85);
+  --bg-elevated: #f4f4f5;
+  --bg-hover: #e4e4e7;
+  --bg-dot: rgba(9, 9, 11, 0.05);
 
-  --text-primary: #0f172a;
-  --text-secondary: #334155;
-  --text-muted: #475569;
+  --text-primary: #09090b;
+  --text-secondary: #3f3f46;
+  --text-muted: #71717a;
 
-  --border-subtle: #e2e8f0;
-  --border-strong: #cbd5e1;
+  --border-subtle: rgba(9, 9, 11, 0.08);
+  --border-strong: rgba(9, 9, 11, 0.16);
+  --inner-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.8);
 
   --accent: #0284c7;
   --accent-strong: #0369a1;
-  --accent-soft: rgba(2, 132, 199, 0.12);
+  --accent-soft: rgba(2, 132, 199, 0.1);
   --accent-contrast: #ffffff;
 
   --confirmed: #15803d;
-  --confirmed-soft: rgba(21, 128, 61, 0.12);
+  --confirmed-soft: rgba(21, 128, 61, 0.11);
   --rejected: #b91c1c;
-  --rejected-soft: rgba(185, 28, 28, 0.12);
+  --rejected-soft: rgba(185, 28, 28, 0.11);
   --uncertain: #b45309;
-  --uncertain-soft: rgba(180, 83, 9, 0.12);
+  --uncertain-soft: rgba(180, 83, 9, 0.11);
   --error: #dc2626;
-  --error-soft: rgba(220, 38, 38, 0.12);
+  --error-soft: rgba(220, 38, 38, 0.11);
 
   --focus-ring: 0 0 0 2px #ffffff, 0 0 0 4px #0284c7;
-  --shadow-drawer: -8px 0 32px rgba(15, 23, 42, 0.16);
+  --shadow-card: 0 1px 2px rgba(9, 9, 11, 0.04), 0 4px 16px rgba(9, 9, 11, 0.04);
+  --shadow-drawer: -12px 0 40px rgba(9, 9, 11, 0.14);
 }

@@ -277,6 +277,32 @@
     const summaries = new Set();
     const photos = new Set();
 
+    // Wikipedia-style citation tracking: value -> Set<nodeId>, and ordered citation registry
+    const factSources = new Map();
+    const citationByNode = new Map();
+    const citations = [];
+    const registerCite = (d) => {
+      if (!d || !d.id) return null;
+      if (citationByNode.has(d.id)) return citationByNode.get(d.id);
+      const a = d.attributes || {};
+      const title = a.title || a.name || a.display_name || a.site || d.label || d.id;
+      const site = a.site || (typeof d.label === "string" && d.label.startsWith("http") ? (() => { try { return new URL(d.label).hostname.replace(/^www\./, ""); } catch { return ""; } })() : d.type);
+      const url = a.url || (typeof d.label === "string" && d.label.startsWith("http") ? d.label : "");
+      const rec = { num: citations.length + 1, nodeId: d.id, title: String(title).slice(0, 72), site: String(site || ""), url };
+      citations.push(rec);
+      citationByNode.set(d.id, rec);
+      return rec;
+    };
+    const supHtml = (val) => {
+      const nodeSet = factSources.get(val);
+      if (!nodeSet || !nodeSet.size) return "";
+      return Array.from(nodeSet).slice(0, 3).map((nid) => {
+        const c = citationByNode.get(nid);
+        if (!c) return "";
+        return `<sup class="cite-ref"><a href="#card-${esc(nid)}" class="cite-link" data-cite-node="${esc(nid)}" title="Source [${c.num}]: ${esc(c.site ? c.site + ' — ' + c.title : c.title)}">[${c.num}]</a></sup>`;
+      }).join("");
+    };
+
     const photoItems = [];
     const seenPhotoUrls = new Set();
     const pushPhoto = (u, srcLabel, linkUrl) => {
@@ -286,9 +312,16 @@
         photoItems.push({ url: u, source: srcLabel || "", pageUrl: linkUrl || u });
       }
     };
-    const addStr = (set, v, maxLen = 260) => {
+    const addStr = (set, v, maxLen = 260, srcData = null) => {
       const s = String(v || "").trim();
-      if (s && s.length < maxLen) set.add(s);
+      if (s && s.length < maxLen) {
+        set.add(s);
+        if (srcData && srcData.id) {
+          registerCite(srcData);
+          if (!factSources.has(s)) factSources.set(s, new Set());
+          factSources.get(s).add(srcData.id);
+        }
+      }
     };
     const isLikelyDomain = (v) => {
       const s = String(v || "").trim().toLowerCase();
@@ -322,31 +355,31 @@
       const ef = a.extra_fields || {};
       const srcLabel = a.site || a.source_tool || d.type || "";
       const pageUrl = a.url || (String(d.label || "").startsWith("http") ? d.label : "");
-      if (d.type === "email" && !isJunkEmail(d.label)) addStr(emails, d.label);
-      if (d.type === "org") addStr(orgs, d.label);
-      if (d.type === "domain" && isLikelyDomain(d.label)) addStr(websites, d.label);
+      if (d.type === "email" && !isJunkEmail(d.label)) addStr(emails, d.label, 260, d);
+      if (d.type === "org") addStr(orgs, d.label, 260, d);
+      if (d.type === "domain" && isLikelyDomain(d.label)) addStr(websites, d.label, 260, d);
       [a.name, a.display_name, ef.legal_name].forEach((x) => {
-        if (x && !isJunkName(x)) addStr(names, x);
+        if (x && !isJunkName(x)) addStr(names, x, 260, d);
       });
       [a.email, a.developer_email, a.support_email, ef.developer_email, ef.support_email].forEach((x) => {
-        if (x && !isJunkEmail(x)) addStr(emails, x);
+        if (x && !isJunkEmail(x)) addStr(emails, x, 260, d);
       });
       (a.contact_emails || []).forEach((x) => {
-        if (x && !isJunkEmail(x)) addStr(emails, x);
+        if (x && !isJunkEmail(x)) addStr(emails, x, 260, d);
       });
-      (a.phone_numbers || []).forEach((x) => addStr(phones, x));
-      [a.location, a.office_address, ef.office_address, a.country].forEach((x) => addStr(locations, x));
-      [a.company, a.developer_name, ef.developer_name].forEach((x) => addStr(orgs, x));
-      (a.orgs || []).forEach((x) => addStr(orgs, x));
-      (a.organizations || []).forEach((x) => addStr(orgs, x));
-      [a.job_title, a.headline, ef.headline].forEach((x) => addStr(roles, x));
-      [a.dob, ef.dob].forEach((x) => addStr(dobs, x));
-      [a.education, ef.education, a.guide_name ? `Guide: ${a.guide_name}` : "", ef.guide_name ? `Guide: ${ef.guide_name}` : ""].forEach((x) => addStr(education, x, 350));
-      (a.skills || []).forEach((x) => addStr(skills, x));
-      [a.current_research_area, ef.current_research_area].forEach((x) => addStr(skills, x, 300));
-      (a.projects_or_stories || []).forEach((x) => addStr(projects, x, 300));
-      if (a.llm_summary) addStr(summaries, a.llm_summary, 400);
-      if (typeof a.website === "string" && a.website.startsWith("http")) addStr(websites, a.website);
+      (a.phone_numbers || []).forEach((x) => addStr(phones, x, 260, d));
+      [a.location, a.office_address, ef.office_address, a.country].forEach((x) => addStr(locations, x, 260, d));
+      [a.company, a.developer_name, ef.developer_name].forEach((x) => addStr(orgs, x, 260, d));
+      (a.orgs || []).forEach((x) => addStr(orgs, x, 260, d));
+      (a.organizations || []).forEach((x) => addStr(orgs, x, 260, d));
+      [a.job_title, a.headline, ef.headline].forEach((x) => addStr(roles, x, 260, d));
+      [a.dob, ef.dob].forEach((x) => addStr(dobs, x, 260, d));
+      [a.education, ef.education, a.guide_name ? `Guide: ${a.guide_name}` : "", ef.guide_name ? `Guide: ${ef.guide_name}` : ""].forEach((x) => addStr(education, x, 350, d));
+      (a.skills || []).forEach((x) => addStr(skills, x, 260, d));
+      [a.current_research_area, ef.current_research_area].forEach((x) => addStr(skills, x, 300, d));
+      (a.projects_or_stories || []).forEach((x) => addStr(projects, x, 300, d));
+      if (a.llm_summary) addStr(summaries, a.llm_summary, 400, d);
+      if (typeof a.website === "string" && a.website.startsWith("http")) addStr(websites, a.website, 260, d);
       [a.avatar_url, a.avatar].forEach((u) => pushPhoto(u, srcLabel, pageUrl));
       (a.images || []).forEach((u) => pushPhoto(u, srcLabel, pageUrl));
     });
@@ -358,10 +391,13 @@
     const row = (label, set, isLink) => {
       const arr = Array.from(set).slice(0, 6);
       if (!arr.length) return "";
-      const vals = arr.map((v) => isLink
-        ? `<a href="${esc(v.startsWith("http") ? v : "https://" + v)}" target="_blank" rel="noopener noreferrer" style="color:var(--accent);">${esc(v)}</a>`
-        : esc(v)
-      ).join("<br>");
+      const vals = arr.map((v) => {
+        const cite = supHtml(v);
+        const core = isLink
+          ? `<a href="${esc(v.startsWith("http") ? v : "https://" + v)}" target="_blank" rel="noopener noreferrer" style="color:var(--accent);">${esc(v)}</a>`
+          : esc(v);
+        return `${core}${cite}`;
+      }).join("<br>");
       return `
         <div style="padding:8px 0; border-bottom:1px solid var(--border-subtle);">
           <div class="field-label" style="font-size:10px; margin-bottom:2px;">${esc(label)}</div>
@@ -372,6 +408,20 @@
 
     const hasAny = names.size || emails.size || phones.size || locations.size || orgs.size || websites.size || photoList.length;
     if (!hasAny) return "";
+
+    const refsHtml = citations.length ? `
+      <details style="margin-top:var(--space-3); padding-top:var(--space-2); border-top:1px solid var(--border-subtle);">
+        <summary class="field-label" style="cursor:pointer; margin-bottom:0;">References &amp; Sources (${citations.length})</summary>
+        <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(240px, 1fr)); gap:6px 16px; margin-top:8px;">
+          ${citations.map((c) => `
+            <div class="mono" style="font-size:11px; display:flex; align-items:baseline; gap:6px; overflow:hidden;">
+              <a href="#card-${esc(c.nodeId)}" class="cite-link" data-cite-node="${esc(c.nodeId)}" style="flex-shrink:0;">[${c.num}]</a>
+              <a href="#card-${esc(c.nodeId)}" data-cite-node="${esc(c.nodeId)}" style="color:var(--text-secondary); text-decoration:none; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="Jump to card: ${esc(c.title)}">${esc(c.site ? `${c.site} · ${c.title}` : c.title)}</a>
+            </div>
+          `).join("")}
+        </div>
+      </details>
+    ` : "";
 
     return `
       <section class="card" style="padding:var(--space-4);">
@@ -408,6 +458,7 @@
             ${row("Profile Summary", summaries, false)}
           </div>
         </div>
+        ${refsHtml}
       </section>
     `;
   }
@@ -537,6 +588,14 @@
       });
     });
 
+    container.querySelectorAll("[data-cite-node]").forEach((el) => {
+      el.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        jumpToCitedCard(el.dataset.citeNode);
+      });
+    });
+
     document.getElementById("btn-load-more-cards")?.addEventListener("click", () => {
       visibleLimit += 100;
       renderResultsView();
@@ -577,6 +636,33 @@
       });
     });
   }
+
+  function jumpToCitedCard(nodeId) {
+    if (!nodeId) return;
+    if (window.OSINT_UI && typeof window.OSINT_UI.switchView === "function") {
+      window.OSINT_UI.switchView("results");
+    }
+    const container = document.getElementById("results-container");
+    if (!container) return;
+    let card = Array.from(container.querySelectorAll(".result-card")).find((c) => c.dataset.nodeId === nodeId);
+    if (!card) {
+      typeFilter = "all";
+      minConfFilter = 0;
+      if (window.OSINT_STATE) window.OSINT_STATE.searchQuery = "";
+      visibleLimit = Math.max(visibleLimit, (window.OSINT_STATE?.nodes || []).length);
+      renderResultsView();
+      card = Array.from(container.querySelectorAll(".result-card")).find((c) => c.dataset.nodeId === nodeId);
+    }
+    if (card) {
+      card.scrollIntoView({ behavior: "smooth", block: "center" });
+      card.classList.remove("cite-target-pulse");
+      void card.offsetWidth;
+      card.classList.add("cite-target-pulse");
+      card.focus({ preventScroll: true });
+      setTimeout(() => card.classList.remove("cite-target-pulse"), 2000);
+    }
+  }
+  window.OSINT_JUMP_TO_CARD = jumpToCitedCard;
 
   function openPhotoGalleryModal() {
     const items = window.__OSINT_DOSSIER_PHOTOS || [];
