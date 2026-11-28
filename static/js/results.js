@@ -752,6 +752,14 @@
     modal.setAttribute("aria-modal", "true");
     modal.setAttribute("aria-label", "Collected Media Gallery");
 
+    const close = () => {
+      modal.classList.remove("open");
+      document.removeEventListener("keydown", onKey);
+      setTimeout(() => modal.remove(), 200);
+      if (triggerEl && typeof triggerEl.focus === "function") triggerEl.focus({ preventScroll: true });
+    };
+    const onKey = (e) => { if (e.key === "Escape") close(); };
+
     const renderGalleryBody = () => {
       const items = showLowConf ? allItems : allItems.filter((it) => it.conf >= 0.5);
       const list = items.length ? items : allItems;
@@ -796,13 +804,6 @@
     document.body.appendChild(modal);
     renderGalleryBody();
     requestAnimationFrame(() => modal.classList.add("open"));
-    const close = () => {
-      modal.classList.remove("open");
-      document.removeEventListener("keydown", onKey);
-      setTimeout(() => modal.remove(), 200);
-      if (triggerEl && typeof triggerEl.focus === "function") triggerEl.focus({ preventScroll: true });
-    };
-    const onKey = (e) => { if (e.key === "Escape") close(); };
     document.getElementById("btn-close-photo-gallery")?.focus({ preventScroll: true });
     modal.addEventListener("click", (e) => { if (e.target === modal) close(); });
     document.addEventListener("keydown", onKey);
