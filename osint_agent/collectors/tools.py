@@ -1023,7 +1023,9 @@ async def collect_email_intel(entity: Entity, client: httpx.AsyncClient) -> list
             hits.append(hit)
 
     # 1. Link non-free corporate/custom email domain
-    domain = email.split("@", 1)[1].strip()
+    local_part, domain = email.split("@", 1)
+    local_part = local_part.strip()
+    domain = domain.strip()
     if domain and domain not in FREE_EMAIL_PROVIDERS:
         _add_hit(
             Hit(
@@ -1037,6 +1039,31 @@ async def collect_email_intel(entity: Entity, client: httpx.AsyncClient) -> list
                 metadata={"domain": domain},
             )
         )
+
+    # 1b. Emit email local-part and separator variations as username leads (e.g. lavish.singh2011 -> lavish.singh2011, lavishsingh2011, lavish_singh2011)
+    _GENERIC_LOCALS = {"info", "admin", "support", "contact", "hello", "help", "sales", "team", "noreply", "no-reply", "office", "mail"}
+    if len(local_part) >= 4 and local_part not in _GENERIC_LOCALS and re.fullmatch(r"[a-z0-9._-]+", local_part):
+        variants = [local_part]
+        if any(sep in local_part for sep in (".", "_", "-")):
+            dotless = re.sub(r"[._-]+", "", local_part)
+            underscored = re.sub(r"[.-]+", "_", local_part)
+            dotted = re.sub(r"[_-]+", ".", local_part)
+            for v in (dotless, underscored, dotted):
+                if len(v) >= 4 and v not in variants:
+                    variants.append(v)
+        for v in variants[:3]:
+            _add_hit(
+                Hit(
+                    target_entity_id=entity.id,
+                    discovered_type=EntityType.USERNAME,
+                    discovered_value=v,
+                    relation="email_local_part",
+                    source_tool="email_intel",
+                    is_trusted=False,
+                    raw_data={"email": email, "variant": v},
+                    metadata={"username": v, "email": email},
+                )
+            )
 
     email_hash = hashlib.md5(email.encode("utf-8")).hexdigest()
     gh_headers = {"User-Agent": DEFAULT_USER_AGENT, "Accept": "application/vnd.github+json"}
@@ -2454,6 +2481,21 @@ def _build_search_queries(entity: Entity) -> list[str]:
         return [f'site:{val} OR "{val}"', f'"{val}"']
     city = str((entity.attributes or {}).get("location") or "").strip()
     queries = [f'"{val}"']
+    if entity.entity_type == EntityType.EMAIL and "@" in val:
+        local = val.split("@", 1)[0].strip()
+        if len(local) >= 4:
+            dotless = re.sub(r"[._-]+", "", local)
+            if dotless != local:
+                queries.append(f'"{local}" OR "{dotless}"')
+            else:
+                queries.append(f'"{local}"')
+    if entity.entity_type == EntityType.USERNAME:
+        v_dotless = re.sub(r"[._-]+", "", val)
+        v_dot = re.sub(r"[_-]+", ".", val)
+        v_under = re.sub(r"[.-]+", "_", val)
+        alts = [x for x in dict.fromkeys([v_dot, v_under, v_dotless]) if x and x.lower() != val.lower()]
+        if alts:
+            queries.append(" OR ".join(f'"{x}"' for x in [val, *alts[:2]]))
     if entity.entity_type in (EntityType.USERNAME, EntityType.PUBLIC_FIGURE, EntityType.CONSENTING_PERSON):
         queries.append(f'"{val}" site:github.com')
     if entity.entity_type in (EntityType.PUBLIC_FIGURE, EntityType.CONSENTING_PERSON):

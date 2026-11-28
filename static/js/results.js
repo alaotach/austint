@@ -292,8 +292,11 @@
     };
     const isLikelyDomain = (v) => {
       const s = String(v || "").trim().toLowerCase();
-      if (!s || /^(s\.no|m\.tech|b\.tech|b\.e|r\.k\..*)$/.test(s)) return false;
+      if (!s || /^(s\.no|m\.tech|b\.tech|b\.e|r\.k\..*|vision\.https)$/.test(s)) return false;
       if (/^[a-z]\.[a-z]\./.test(s)) return false;
+      if (Array.from(emails).some((em) => em.toLowerCase().startsWith(s + "@"))) return false;
+      const tld = s.split(".").pop() || "";
+      if (tld.length < 2 || tld.length > 6) return false;
       return true;
     };
 
