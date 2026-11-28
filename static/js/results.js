@@ -778,15 +778,15 @@
               <button type="button" class="btn btn-sm" id="btn-close-photo-gallery">Close (Esc)</button>
             </div>
           </div>
-          <div style="overflow-y:auto; display:grid; grid-template-columns:repeat(auto-fill, minmax(150px, 1fr)); gap:12px; padding-right:4px;">
+          <div style="overflow-y:auto; display:grid; grid-template-columns:repeat(auto-fill, minmax(156px, 1fr)); align-content:start; gap:12px; padding-right:4px;">
             ${list.map((it) => `
-              <div class="card" style="padding:8px; display:flex; flex-direction:column; gap:6px;">
-                <a href="${esc(it.url)}" target="_blank" rel="noopener noreferrer" style="display:block; aspect-ratio:1/1; overflow:hidden; border-radius:4px; background:var(--bg-elevated);">
+              <div class="card" style="padding:8px; display:flex; flex-direction:column; gap:8px; overflow:visible;">
+                <a href="${esc(it.url)}" target="_blank" rel="noopener noreferrer" style="display:block; width:100%; height:136px; flex-shrink:0; overflow:hidden; border-radius:4px; background:var(--bg-elevated);">
                   <img src="${esc(it.url)}" alt="" loading="lazy" onerror="this.closest('.card').style.display='none'" style="width:100%; height:100%; object-fit:cover; display:block;">
                 </a>
                 <div style="display:flex; justify-content:space-between; align-items:center; gap:4px;">
                   <span class="mono" style="font-size:10px; color:var(--text-muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${esc(it.source || "image")}</span>
-                  <span class="badge ${it.conf >= 0.5 ? "badge-done" : "badge-unavailable"}" style="padding:1px 5px; font-size:10px;">${Math.round(it.conf * 100)}%</span>
+                  <span class="badge ${it.conf >= 0.5 ? "badge-done" : "badge-unavailable"}" style="padding:1px 5px; font-size:10px; flex-shrink:0;">${Math.round(it.conf * 100)}%</span>
                 </div>
                 <a href="${esc(it.url)}" target="_blank" rel="noopener noreferrer" class="btn btn-xs" style="text-align:center;">Open Original</a>
               </div>
