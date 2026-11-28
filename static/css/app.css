@@ -79,8 +79,14 @@ body {
   display: inline-block;
 }
 
+@keyframes statusPulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
 .status-dot.running {
   background: var(--accent);
+  animation: statusPulse 1.6s ease-in-out infinite;
 }
 
 .status-dot.completed {
@@ -123,11 +129,19 @@ body {
   font-weight: 600;
   text-align: left;
   cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out), transform var(--dur-press) var(--ease-out);
+  user-select: none;
 }
 
-.nav-item:hover {
-  background: var(--bg-elevated);
-  color: var(--text-primary);
+@media (hover: hover) and (pointer: fine) {
+  .nav-item:hover {
+    background: var(--bg-elevated);
+    color: var(--text-primary);
+  }
+}
+
+.nav-item:active {
+  transform: scale(0.98);
 }
 
 .nav-item.active {

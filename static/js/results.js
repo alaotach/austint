@@ -567,12 +567,14 @@
         });
         if (resp.ok && btn) {
           btn.textContent = "Saved!";
+          if (window.OSINT_UI?.toast) window.OSINT_UI.toast(`Saved snapshot "${name.trim()}"`, "success");
           if (typeof window.refreshSavedRuns === "function") window.refreshSavedRuns();
           setTimeout(() => {
             btn.textContent = "Save Snapshot";
             btn.disabled = false;
           }, 1500);
         } else if (btn) {
+          if (window.OSINT_UI?.toast) window.OSINT_UI.toast("Failed to save snapshot", "error");
           btn.disabled = false;
         }
       } catch (_) {
@@ -666,13 +668,17 @@
 
   function openPhotoGalleryModal() {
     const items = window.__OSINT_DOSSIER_PHOTOS || [];
+    const triggerEl = document.activeElement;
     let modal = document.getElementById("osint-photo-gallery-modal");
     if (modal) modal.remove();
     modal = document.createElement("div");
     modal.id = "osint-photo-gallery-modal";
-    modal.style.cssText = "position:fixed; inset:0; z-index:9999; background:rgba(8,12,20,0.88); backdrop-filter:blur(4px); display:flex; align-items:center; justify-content:center; padding:24px;";
+    modal.className = "modal-backdrop";
+    modal.setAttribute("role", "dialog");
+    modal.setAttribute("aria-modal", "true");
+    modal.setAttribute("aria-label", "Collected Photos Gallery");
     modal.innerHTML = `
-      <div class="card" style="max-width:1040px; width:100%; max-height:88vh; display:flex; flex-direction:column; gap:12px; padding:20px;">
+      <div class="card modal-dialog" style="gap:12px; padding:20px;">
         <div style="display:flex; justify-content:space-between; align-items:center;">
           <div>
             <div class="field-label">Collected Photos &amp; Media</div>
@@ -694,14 +700,20 @@
       </div>
     `;
     document.body.appendChild(modal);
+    requestAnimationFrame(() => modal.classList.add("open"));
     const close = () => {
-      modal.remove();
+      modal.classList.remove("open");
       document.removeEventListener("keydown", onKey);
+      setTimeout(() => modal.remove(), 200);
+      if (triggerEl && typeof triggerEl.focus === "function") {
+        triggerEl.focus({ preventScroll: true });
+      }
     };
     const onKey = (e) => {
       if (e.key === "Escape") close();
     };
     document.getElementById("btn-close-photo-gallery")?.addEventListener("click", close);
+    document.getElementById("btn-close-photo-gallery")?.focus({ preventScroll: true });
     modal.addEventListener("click", (e) => {
       if (e.target === modal) close();
     });

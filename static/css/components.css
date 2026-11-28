@@ -14,15 +14,17 @@
   font-size: 12px;
   font-weight: 600;
   cursor: pointer;
-  transition: background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out), transform 100ms var(--ease-out);
+  transition: background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out), transform var(--dur-press) var(--ease-out);
   text-decoration: none;
   white-space: nowrap;
   user-select: none;
 }
 
-.btn:hover:not(:disabled) {
-  background: var(--bg-hover);
-  border-color: var(--accent);
+@media (hover: hover) and (pointer: fine) {
+  .btn:hover:not(:disabled) {
+    background: var(--bg-hover);
+    border-color: var(--accent);
+  }
 }
 
 .btn:active:not(:disabled) {
@@ -40,9 +42,11 @@
   color: var(--accent-contrast);
 }
 
-.btn-primary:hover:not(:disabled) {
-  background: var(--accent-strong);
-  border-color: var(--accent-strong);
+@media (hover: hover) and (pointer: fine) {
+  .btn-primary:hover:not(:disabled) {
+    background: var(--accent-strong);
+    border-color: var(--accent-strong);
+  }
 }
 
 .btn-danger {
@@ -114,9 +118,18 @@
   cursor: pointer;
 }
 
-.card-interactive:hover,
+@media (hover: hover) and (pointer: fine) {
+  .card-interactive:hover {
+    border-color: var(--border-strong);
+  }
+}
+
 .card-interactive:focus-within {
   border-color: var(--border-strong);
+}
+
+.card-interactive:active {
+  transform: scale(0.99);
 }
 
 .card-interactive.is-selected {
@@ -143,9 +156,11 @@
   transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
 }
 
-.cite-link:hover {
-  background: var(--accent-soft);
-  text-decoration: underline;
+@media (hover: hover) and (pointer: fine) {
+  .cite-link:hover {
+    background: var(--accent-soft);
+    text-decoration: underline;
+  }
 }
 
 @keyframes citePulse {
@@ -154,7 +169,7 @@
     border-color: var(--accent);
   }
   50% {
-    box-shadow: 0 0 0 6px rgba(56, 189, 248, 0.18);
+    box-shadow: 0 0 0 5px rgba(56, 189, 248, 0.16);
     border-color: var(--accent);
   }
   100% {
@@ -163,7 +178,7 @@
 }
 
 .cite-target-pulse {
-  animation: citePulse 1.8s var(--ease-out) 1;
+  animation: citePulse 1.2s var(--ease-out) 1;
   border-color: var(--accent) !important;
 }
 
@@ -186,11 +201,19 @@
   font-size: 12px;
   font-weight: 600;
   cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out), transform var(--dur-press) var(--ease-out);
+  user-select: none;
 }
 
-.tab-btn:hover {
-  color: var(--text-primary);
-  background: var(--bg-elevated);
+@media (hover: hover) and (pointer: fine) {
+  .tab-btn:hover {
+    color: var(--text-primary);
+    background: var(--bg-elevated);
+  }
+}
+
+.tab-btn:active {
+  transform: scale(0.97);
 }
 
 .tab-btn.active {
@@ -275,6 +298,22 @@
   transition: width 240ms var(--ease-out);
 }
 
+.drawer-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 55;
+  background: rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(2px);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 220ms var(--ease-out);
+}
+
+.drawer-backdrop.open {
+  opacity: 1;
+  pointer-events: auto;
+}
+
 /* Drawer */
 .drawer {
   position: fixed;
@@ -289,11 +328,102 @@
   display: flex;
   flex-direction: column;
   transform: translateX(100%);
-  transition: transform 320ms var(--ease-drawer);
+  transition: transform var(--dur-drawer) var(--ease-drawer);
 }
 
 .drawer.open {
   transform: translateX(0);
+}
+
+/* Centered Modal (never scale(0), enters from scale(0.95) + opacity 0) */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  background: rgba(0, 0, 0, 0.72);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  opacity: 0;
+  transition: opacity 180ms var(--ease-out);
+}
+
+.modal-backdrop.open {
+  opacity: 1;
+}
+
+.modal-dialog {
+  width: min(980px, 100%);
+  max-height: 88vh;
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+  transform-origin: center;
+  transform: scale(0.95);
+  opacity: 0;
+  transition: transform 200ms var(--ease-out), opacity 180ms var(--ease-out);
+}
+
+.modal-backdrop.open .modal-dialog {
+  transform: scale(1);
+  opacity: 1;
+}
+
+/* Sonner-style Toast Stack */
+.toast-stack {
+  position: fixed;
+  right: var(--space-4);
+  bottom: var(--space-4);
+  z-index: 80;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  width: min(340px, calc(100vw - 32px));
+  pointer-events: none;
+}
+
+.toast {
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: 10px 14px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-strong);
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  box-shadow: var(--shadow-card);
+  opacity: 0;
+  transform: translateY(12px) scale(0.96);
+  transition: transform 240ms var(--ease-out), opacity 200ms var(--ease-out);
+  touch-action: pan-x;
+}
+
+.toast.open {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+}
+
+.toast-success { border-color: var(--confirmed); }
+.toast-error { border-color: var(--rejected); color: var(--rejected); }
+
+@media (pointer: coarse) {
+  .btn,
+  .tab-btn,
+  .input,
+  .select {
+    min-height: 44px;
+  }
+
+  .cite-link {
+    padding: 4px 6px;
+  }
 }
 
 .drawer-header {
