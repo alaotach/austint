@@ -161,7 +161,7 @@
                 </div>
                 <div>
                   <label class="field-label" for="target-value">Seed Value</label>
-                  <input type="text" class="input" id="target-value" placeholder="e.g. example.com or torvalds" value="example.com">
+                  <input type="text" class="input" id="target-value" placeholder="e.g. example.com or torvalds" value="">
                 </div>
               </div>
 
