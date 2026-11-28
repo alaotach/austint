@@ -2562,6 +2562,65 @@ async def _fetch_pdf_text(url: str, client: httpx.AsyncClient, max_chars: int = 
     return ""
 
 
+def _extract_pdf_structured_fields(pdf_text: str, url: str, title: str, entity: Entity) -> dict[str, Any]:
+    """Deterministically extract common CV/document fields from PDF text and URL."""
+    extra: dict[str, Any] = {}
+    if not pdf_text:
+        return extra
+
+    emails: list[str] = []
+    for em in re.findall(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}", f"{url} {pdf_text}"):
+        low = em.lower().rstrip(".")
+        if not low.endswith((".pdf", ".png", ".jpg", ".jpeg", ".webp", ".svg")):
+            if low not in emails:
+                emails.append(low)
+        else:
+            # Handle URLs like .../kirarjyoti@bhu.ac.in.pdf -> kirarjyoti@bhu.ac.in
+            trimmed = re.sub(r"\.(?:pdf|png|jpg|jpeg|webp|svg)$", "", low)
+            if "@" in trimmed and "." in trimmed.split("@", 1)[1] and trimmed not in emails:
+                emails.append(trimmed)
+    if emails:
+        extra["contact_emails"] = emails[:6]
+        extra["email"] = emails[0]
+
+    phones = []
+    for pm in re.finditer(r"(?:Mob(?:ile)?|Phone|Tel|Contact)\s*[:\-]?\s*(\+?\d[\d\s\-]{7,15}\d)", pdf_text, re.IGNORECASE):
+        ph = re.sub(r"\s+", " ", pm.group(1)).strip()
+        if ph not in phones:
+            phones.append(ph)
+    if phones:
+        extra["phone_numbers"] = phones[:4]
+
+    dob_m = re.search(r"\bDOB\s*[:\-]?\s*([0-9]{1,2}[/\-][A-Za-z0-9]{2,9}[/\-][0-9]{2,4})", pdf_text, re.IGNORECASE)
+    if dob_m:
+        extra["dob"] = dob_m.group(1).strip()
+
+    guide_m = re.search(
+        r"Guide[’']?s?\s*Name\s*[:\-]?\s*(.+?)(?=\s+(?:University|Current|Professional|Academic|Work|$))",
+        pdf_text,
+        re.IGNORECASE,
+    )
+    if guide_m:
+        extra["guide_name"] = guide_m.group(1).strip(" .,:;")
+
+    res_m = re.search(
+        r"Current Research Area\s*[:\-]?\s*(.+?)(?=\s+(?:Ph\.?D|Guide|University|Professional|Academic|Work|$))",
+        pdf_text,
+        re.IGNORECASE,
+    )
+    if res_m:
+        extra["current_research_area"] = res_m.group(1).strip(" .,:;")
+
+    if title and re.search(r"curriculum\s+vitae|\bcv\b", title, re.IGNORECASE):
+        cleaned_name = re.sub(r"^(?:curriculum\s+vitae|resume|cv)\s*[:\-]?\s*", "", title, flags=re.IGNORECASE).strip()
+        if cleaned_name and len(cleaned_name) <= 60:
+            extra["name"] = cleaned_name
+    elif entity.entity_type in (EntityType.CONSENTING_PERSON, EntityType.PUBLIC_FIGURE) and entity.value.lower() in pdf_text.lower():
+        extra["name"] = entity.value.strip()
+
+    return extra
+
+
 @register_tool(
     name="exa_search",
     target_types=[
@@ -2680,10 +2739,12 @@ async def collect_exa_search(entity: Entity, client: httpx.AsyncClient) -> list[
         title = item["title"]
         snippet = item["snippet"]
         pdf_text = ""
+        pdf_fields: dict[str, Any] = {}
         if urlparse(url).path.lower().endswith(".pdf"):
             pdf_text = await _fetch_pdf_text(url, client)
             if pdf_text:
                 snippet = pdf_text
+                pdf_fields = _extract_pdf_structured_fields(pdf_text, url, title, entity)
         author = item.get("author", "")
         pub_date = item.get("published_date", "")
         site = urlparse(url).netloc.lower()
@@ -2701,9 +2762,10 @@ async def collect_exa_search(entity: Entity, client: httpx.AsyncClient) -> list[
                     "url": url,
                     "title": title,
                     "bio": (snippet[:1500] if pdf_text else snippet[:400]) if snippet else title,
+                    **pdf_fields,
                     **({"document_text": pdf_text} if pdf_text else {}),
                     **({"images": item["images"]} if item.get("images") else {}),
-                    **({"name": author} if author else {}),
+                    **({"name": author} if author and "name" not in pdf_fields else {}),
                     **({"published_date": pub_date} if pub_date else {}),
                 },
             )
