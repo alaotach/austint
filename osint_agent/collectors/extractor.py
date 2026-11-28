@@ -125,6 +125,13 @@ def is_sensitive(candidate: str) -> bool:
     return False
 
 
+def deobfuscate_emails(text: str) -> str:
+    """Normalize obfuscated emails like user[at]domain[dot]com or user(at)domain(dot)ac(dot)in."""
+    out = re.sub(r"\s*[\[\(\{]\s*at\s*[\]\)\}]\s*", "@", text, flags=re.IGNORECASE)
+    out = re.sub(r"\s*[\[\(\{]\s*dot\s*[\]\)\}]\s*", ".", out, flags=re.IGNORECASE)
+    return out
+
+
 def extract_entities(text: str) -> list[Entity]:
     """Extract lead entities (emails, domains, handles, organizations, places) while scrubbing sensitive info."""
     clean_text = text.strip()
@@ -134,8 +141,8 @@ def extract_entities(text: str) -> list[Entity]:
     entities: list[Entity] = []
     seen_ids: set[str] = set()
 
-    # 1. Extract Emails
-    for match in EMAIL_REGEX.finditer(clean_text):
+    # 1. Extract Emails (including [at]/[dot] obfuscated forms)
+    for match in EMAIL_REGEX.finditer(deobfuscate_emails(clean_text)):
         email_val = match.group(0).lower().strip()
         if not is_sensitive(email_val):
             ent = Entity.create(

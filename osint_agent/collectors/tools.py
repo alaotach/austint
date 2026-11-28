@@ -2566,12 +2566,14 @@ async def _fetch_pdf_text(url: str, client: httpx.AsyncClient, max_chars: int = 
 
 def _extract_pdf_structured_fields(pdf_text: str, url: str, title: str, entity: Entity) -> dict[str, Any]:
     """Deterministically extract common CV/document fields from PDF text and URL."""
+    from osint_agent.collectors.extractor import deobfuscate_emails
+
     extra: dict[str, Any] = {}
     if not pdf_text:
         return extra
 
     emails: list[str] = []
-    for em in re.findall(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}", f"{url} {pdf_text}"):
+    for em in re.findall(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}", deobfuscate_emails(f"{url} {pdf_text}")):
         low = em.lower().rstrip(".")
         if not low.endswith((".pdf", ".png", ".jpg", ".jpeg", ".webp", ".svg")):
             if low not in emails:

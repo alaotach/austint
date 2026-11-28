@@ -903,12 +903,13 @@ async def _analyze_generic_html(url: str, client: httpx.AsyncClient) -> dict[str
             if images:
                 info["images"] = images[:8]
 
+            from osint_agent.collectors.extractor import deobfuscate_emails
             mailto_emails = list(dict.fromkeys(MAILTO_PATTERN.findall(clean_content_html)))
-            if not mailto_emails:
-                mailto_emails = [
-                    em.lower() for em in re.findall(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}', _strip_html(clean_content_html))
-                    if not em.lower().endswith((".png", ".jpg", ".webp", ".svg", "sentry.io", "example.com"))
-                ]
+            plain_emails = [
+                em.lower() for em in re.findall(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}', deobfuscate_emails(_strip_html(clean_content_html)))
+                if not em.lower().endswith((".png", ".jpg", ".webp", ".svg", "sentry.io", "example.com"))
+            ]
+            mailto_emails = list(dict.fromkeys(mailto_emails + plain_emails))
             if mailto_emails:
                 dedup_emails = list(dict.fromkeys(e.lower() for e in mailto_emails))
                 info["email"] = dedup_emails[0]
