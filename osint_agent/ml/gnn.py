@@ -824,11 +824,16 @@ class NeuralGNNResolver(BaseResolver):
             depth = int(ndata.get("depth", 0))
             if depth == 0:
                 continue
-            ndata["chain_confidence"] = float(ndata.get("confidence", 0.0))
-            ndata["phase_c_score"] = float(gdata.phase_c_scores[i].item())
+            chain_conf = float(ndata.get("confidence", 0.0))
+            phase_c = float(gdata.phase_c_scores[i].item())
+            ndata["chain_confidence"] = chain_conf
+            ndata["phase_c_score"] = phase_c
             refined = round(float(gnn_probs[i]), 4)
             ndata["gnn_confidence"] = refined
-            ndata["confidence"] = refined
+            if phase_c >= 0.70 and refined < 0.35:
+                ndata["confidence"] = round(max(refined, 0.5 * phase_c + 0.3 * chain_conf), 4)
+            else:
+                ndata["confidence"] = refined
         return graph
 
     def save(self, path: str | Path) -> Path:

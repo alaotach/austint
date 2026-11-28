@@ -2456,6 +2456,8 @@ def _build_search_queries(entity: Entity) -> list[str]:
     queries = [f'"{val}"']
     if entity.entity_type in (EntityType.USERNAME, EntityType.PUBLIC_FIGURE, EntityType.CONSENTING_PERSON):
         queries.append(f'"{val}" site:github.com')
+    if entity.entity_type in (EntityType.PUBLIC_FIGURE, EntityType.CONSENTING_PERSON):
+        queries.append(f'"{val}" faculty OR profile OR scholar OR linkedin')
     if city:
         queries.append(f'"{val}" "{city}"')
     return queries
@@ -2481,7 +2483,7 @@ async def _search_brave(query: str, api_key: str, client: httpx.AsyncClient) -> 
 async def _search_tavily(query: str, api_key: str, client: httpx.AsyncClient) -> list[dict[str, Any]]:
     resp = await client.post(
         "https://api.tavily.com/search",
-        json={"api_key": api_key, "query": query, "max_results": 5, "include_images": True},
+        json={"api_key": api_key, "query": query, "max_results": 8, "include_images": True},
         timeout=10.0,
     )
     if resp.status_code != 200:
@@ -2617,6 +2619,32 @@ def _extract_pdf_structured_fields(pdf_text: str, url: str, title: str, entity: 
             extra["name"] = cleaned_name
     elif entity.entity_type in (EntityType.CONSENTING_PERSON, EntityType.PUBLIC_FIGURE) and entity.value.lower() in pdf_text.lower():
         extra["name"] = entity.value.strip()
+
+    # Extract address/location (e.g. header block between name and email/Mob, or PIN-code phrase)
+    subj_name = extra.get("name") or entity.value.strip()
+    addr_m = re.search(
+        re.escape(subj_name) + r"\s+(.{8,140}?)(?=\s+[a-zA-Z0-9._%+-]+@|\s+(?:Mob|Mobile|Phone|Tel|DOB)\b)",
+        pdf_text,
+        re.IGNORECASE,
+    )
+    if addr_m:
+        addr = addr_m.group(1).strip(" ,;:-")
+        if addr and len(addr) >= 8:
+            extra["location"] = addr
+    if "location" not in extra:
+        pin_m = re.search(r"([A-Za-z0-9][A-Za-z0-9,\-./\s]{6,100}\b\d{6}\b)", pdf_text)
+        if pin_m:
+            extra["location"] = pin_m.group(1).strip(" ,;:-")
+
+    # Extract dated career/education milestones for Timeline view
+    career_events: list[str] = []
+    for deg_m in re.finditer(r"\b(B\.?E\.?|B\.?Tech|M\.?Tech|M\.?Sc|Ph\.?D\.?)\b[^.\n]{0,80}?\b((?:19|20)\d{2})\b", pdf_text, re.IGNORECASE):
+        career_events.append(f"{deg_m.group(2)}: {deg_m.group(1)} ({re.sub(r'\\s+', ' ', deg_m.group(0)).strip()})")
+    work_m = re.search(r"(Assistant Professor|Associate Professor|Professor|Lecturer|Researcher|Engineer)[^.\n]{0,100}?(\d{1,2}/[A-Za-z0-9]+/(?:19|20)\d{2}|(?:19|20)\d{2})", pdf_text, re.IGNORECASE)
+    if work_m:
+        career_events.append(f"{work_m.group(2)}: {work_m.group(1)} ({re.sub(r'\\s+', ' ', work_m.group(0)).strip()})")
+    if career_events:
+        extra["career_timeline"] = career_events[:8]
 
     return extra
 

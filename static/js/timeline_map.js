@@ -21,12 +21,42 @@
     const dated = [];
     const geoPoints = [];
 
+    const seenTl = new Set();
+    const pushDated = (id, type, label, dateStr) => {
+      const ds = String(dateStr || "").trim();
+      if (!ds) return;
+      const key = `${id}|${ds}|${label}`;
+      if (seenTl.has(key)) return;
+      seenTl.add(key);
+      dated.push({ id, label, type, date: ds });
+    };
+
     nodes.forEach((n) => {
       const d = n.data || {};
       const attrs = d.attributes || {};
+      const ef = attrs.extra_fields || {};
       const dt = attrs.date || attrs.published_date || attrs.joined || attrs.created || attrs.created_at || attrs.updated_at;
       if (dt) {
-        dated.push({ id: d.id, label: d.label, type: d.type, date: String(dt) });
+        pushDated(d.id, d.type, d.label, String(dt));
+      }
+      const dob = attrs.dob || ef.dob;
+      if (dob) {
+        pushDated(d.id, "DOB", `${attrs.name || d.label}`, String(dob));
+      }
+      const careerArr = Array.isArray(attrs.career_timeline) ? attrs.career_timeline : (Array.isArray(ef.career_timeline) ? ef.career_timeline : []);
+      careerArr.forEach((item) => {
+        const s = String(item || "").trim();
+        const m = s.match(/^([^:]+):\s*(.+)$/);
+        if (m) pushDated(d.id, "Career", m[2], m[1]);
+        else if (s) pushDated(d.id, "Career", s, "Milestone");
+      });
+      const textBlob = [attrs.experience, ef.experience, attrs.education, ef.education, attrs.bio].filter(Boolean).join(" | ");
+      if (textBlob) {
+        const reMil = /(?:Assistant Professor|Associate Professor|Professor|Ph\.?D\.?|M\.?Tech|B\.?E\.?)[^|.\n]{0,90}?\b((?:19|20)\d{2})\b/gi;
+        let m;
+        while ((m = reMil.exec(textBlob)) !== null) {
+          pushDated(d.id, "Career", m[0].replace(/\s+/g, " ").trim(), m[1]);
+        }
       }
       const lat = attrs.lat ?? attrs.latitude;
       const lon = attrs.lon ?? attrs.longitude;
