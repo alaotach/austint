@@ -10,7 +10,7 @@ Group=ubuntu
 WorkingDirectory=/opt/austint
 EnvironmentFile=-/opt/austint/.env
 # Single worker preserves in-memory job state and live SSE streams
-ExecStart=/opt/austint/.venv/bin/python -m uvicorn osint_agent.api.server:app --host 127.0.0.1 --port 8000 --workers 1 --proxy-headers --forwarded-allow-ips='*'
+ExecStart=/opt/austint/.venv/bin/python -m uvicorn osint_agent.api.server:app --host 127.0.0.1 --port 2436 --workers 1 --proxy-headers --forwarded-allow-ips='*'
 Restart=always
 RestartSec=3
 StandardOutput=journal
