@@ -52,113 +52,119 @@
     if (!container) return;
 
     container.innerHTML = `
-      <div style="display:flex; flex-direction:column; gap: var(--space-4);">
-        <div class="tab-bar" role="tablist" aria-label="Launch Input Mode">
-          <button type="button" class="tab-btn ${launchMode === "structured" ? "active" : ""}" data-lmode="structured">Structured Seed</button>
-          <button type="button" class="tab-btn ${launchMode === "freetext" ? "active" : ""}" data-lmode="freetext">Free-Text Seeds</button>
-          <button type="button" class="tab-btn ${launchMode === "image" ? "active" : ""}" data-lmode="image">Image / EXIF / GPS</button>
-        </div>
-
-        <div id="launch-panel-structured" style="display:${launchMode === "structured" ? "grid" : "none"}; gap: var(--space-3);" class="grid-2">
+      <div class="launch-split">
+        <section class="card" style="padding: var(--space-6); display:flex; flex-direction:column; gap: var(--space-5);">
           <div>
-            <label class="field-label" for="target-kind">Target Kind (Allowed Scope)</label>
-            <select class="select" id="target-kind">
-              <option value="domain">domain (Public Domain)</option>
-              <option value="org">org (Public Organization)</option>
-              <option value="place">place (Public Location)</option>
-              <option value="public_figure">public_figure (Public Figure)</option>
-              <option value="consenting_person">consenting_person (Consenting Person)</option>
-              <option value="username">username (Public Handle)</option>
-              <option value="email">email (Public Email)</option>
-            </select>
+            <div class="segmented-bar" role="tablist" aria-label="Launch Input Mode">
+              <button type="button" class="tab-btn ${launchMode === "structured" ? "active" : ""}" data-lmode="structured">Structured Seed</button>
+              <button type="button" class="tab-btn ${launchMode === "freetext" ? "active" : ""}" data-lmode="freetext">Free-Text Brief</button>
+              <button type="button" class="tab-btn ${launchMode === "image" ? "active" : ""}" data-lmode="image">Image / EXIF</button>
+            </div>
           </div>
-          <div>
-            <label class="field-label" for="target-value">Seed Value</label>
-            <input type="text" class="input" id="target-value" placeholder="e.g. example.com or torvalds" value="example.com">
-          </div>
-        </div>
 
-        <div id="launch-panel-freetext" style="display:${launchMode === "freetext" ? "flex" : "none"}; flex-direction:column; gap: var(--space-2);">
-          <label class="field-label" for="target-freetext">Natural Language Target Brief</label>
-          <textarea class="textarea" id="target-freetext" placeholder="Paste public bio, organization description, or domain notes to extract seeds..."></textarea>
-          <div style="display:flex; align-items:center; gap: var(--space-2); flex-wrap:wrap;">
-            <button type="button" class="btn btn-sm" id="btn-parse-seeds">Extract Seeds</button>
-            <span class="mono" style="font-size:12px; color: var(--text-muted);" id="parse-seeds-status"></span>
+          <div id="launch-panel-structured" style="display:${launchMode === "structured" ? "grid" : "none"}; gap: var(--space-4);" class="grid-2">
+            <div>
+              <label class="field-label" for="target-kind">Target Kind</label>
+              <select class="select" id="target-kind">
+                <option value="domain">domain (Public Domain)</option>
+                <option value="org">org (Public Organization)</option>
+                <option value="place">place (Public Location)</option>
+                <option value="public_figure">public_figure (Public Figure)</option>
+                <option value="consenting_person">consenting_person (Consenting Person)</option>
+                <option value="username">username (Public Handle)</option>
+                <option value="email">email (Public Email)</option>
+              </select>
+            </div>
+            <div>
+              <label class="field-label" for="target-value">Seed Value</label>
+              <input type="text" class="input" id="target-value" placeholder="e.g. example.com or torvalds" value="example.com">
+            </div>
           </div>
-          <div id="parsed-seeds-preview" style="display:flex; flex-wrap:wrap; gap: var(--space-2);"></div>
-        </div>
 
-        <div id="launch-panel-image" style="display:${launchMode === "image" ? "flex" : "none"}; flex-direction:column; gap: var(--space-3);">
-          <label class="field-label" for="target-image-file">Drop or Select Image (EXIF, GPS, Reverse Search)</label>
-          <div id="image-dropzone" class="state-panel" style="padding: var(--space-4); cursor:pointer;">
-            <input type="file" id="target-image-file" accept="image/*" style="max-width:100%;">
-            <div style="margin-top: var(--space-2); font-size:12px;">Extracts EXIF metadata, GPS coordinates, and public web matches.</div>
+          <div id="launch-panel-freetext" style="display:${launchMode === "freetext" ? "flex" : "none"}; flex-direction:column; gap: var(--space-3);">
+            <label class="field-label" for="target-freetext">Natural Language Target Brief</label>
+            <textarea class="textarea" id="target-freetext" placeholder="Paste public bio, faculty profile, organization description, or domain notes to extract seeds..."></textarea>
+            <div style="display:flex; align-items:center; gap: var(--space-3); flex-wrap:wrap;">
+              <button type="button" class="btn btn-sm" id="btn-parse-seeds">Extract Seeds</button>
+              <span class="mono" style="font-size:12px; color: var(--text-muted);" id="parse-seeds-status"></span>
+            </div>
+            <div id="parsed-seeds-preview" style="display:flex; flex-wrap:wrap; gap: var(--space-2);"></div>
           </div>
-          <div id="image-preview-result"></div>
-        </div>
 
-        <div class="grid-3">
-          <div>
-            <label class="field-label" for="param-depth">Max Depth: <strong id="val-depth">2</strong></label>
-            <input type="range" id="param-depth" min="1" max="4" value="2" style="width:100%;">
+          <div id="launch-panel-image" style="display:${launchMode === "image" ? "flex" : "none"}; flex-direction:column; gap: var(--space-3);">
+            <label class="field-label" for="target-image-file">Upload Image (EXIF, GPS &amp; Reverse Search)</label>
+            <div id="image-dropzone" class="state-panel" style="padding: var(--space-5); cursor:pointer;">
+              <input type="file" id="target-image-file" accept="image/*" style="max-width:100%;">
+              <div style="margin-top: var(--space-2); font-size:12px;">Extracts EXIF metadata, GPS coordinates, and public web matches.</div>
+            </div>
+            <div id="image-preview-result"></div>
           </div>
-          <div>
-            <label class="field-label" for="param-calls">Max Tool Calls: <strong id="val-calls">15</strong></label>
-            <input type="range" id="param-calls" min="1" max="40" value="15" style="width:100%;">
-          </div>
-          <div>
-            <label class="field-label" for="param-llm">Max LLM Calls: <strong id="val-llm">10</strong></label>
-            <input type="range" id="param-llm" min="0" max="30" value="10" style="width:100%;">
-          </div>
-        </div>
 
-        <div class="grid-2">
-          <div>
-            <label class="field-label" for="param-resolver">Entity Resolver</label>
-            <select class="select" id="param-resolver">
-              <option value="baseline">baseline (Weighted Heuristics)</option>
-              <option value="learned">learned (Monotonic LogReg)</option>
-              <option value="neural">neural (Multimodal CharCNN+CLIP)</option>
-              <option value="neural_gnn">neural_gnn (Collective GNN)</option>
-            </select>
-          </div>
-          <div>
-            <label class="field-label" for="param-planner">Expansion Planner</label>
-            <select class="select" id="param-planner">
-              <option value="rule">rule (RuleBasedPlanner)</option>
-              <option value="llm">llm (LLMPlanner)</option>
-              <option value="bandit">bandit (LinUCB BanditPlanner)</option>
-            </select>
-          </div>
-        </div>
+          <div style="border-top: 1px solid var(--border-subtle); padding-top: var(--space-5); display:flex; flex-direction:column; gap: var(--space-4);">
+            <div class="grid-3">
+              <div>
+                <label class="field-label" for="param-depth">Max Depth: <strong id="val-depth" style="color:var(--text-primary);">2</strong></label>
+                <input type="range" id="param-depth" min="1" max="4" value="2" style="width:100%;">
+              </div>
+              <div>
+                <label class="field-label" for="param-calls">Tool Calls: <strong id="val-calls" style="color:var(--text-primary);">15</strong></label>
+                <input type="range" id="param-calls" min="1" max="40" value="15" style="width:100%;">
+              </div>
+              <div>
+                <label class="field-label" for="param-llm">LLM Calls: <strong id="val-llm" style="color:var(--text-primary);">10</strong></label>
+                <input type="range" id="param-llm" min="0" max="30" value="10" style="width:100%;">
+              </div>
+            </div>
 
-        <div class="card" style="background: var(--bg-elevated); border-color: var(--border-strong);">
-          <label style="display:flex; align-items:flex-start; gap: var(--space-3); cursor:pointer;">
-            <input type="checkbox" id="consent-checkbox" style="margin-top: 3px;">
-            <span style="font-size:13px;">
-              <strong>Mandatory Authorization Gate:</strong> I confirm authorized, public-data-only reconnaissance for this target scope.
-            </span>
-          </label>
-        </div>
-
-        <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap: var(--space-3);">
-          <div style="display:flex; gap: var(--space-2); flex-wrap:wrap;">
-            <button type="button" class="btn btn-primary" id="btn-launch-scan" disabled>Start Investigation</button>
-            <button type="button" class="btn" id="btn-load-demo">Load Recorded Run</button>
+            <div class="grid-2">
+              <div>
+                <label class="field-label" for="param-resolver">Entity Resolver</label>
+                <select class="select" id="param-resolver">
+                  <option value="baseline">baseline (Weighted Heuristics)</option>
+                  <option value="learned">learned (Monotonic LogReg)</option>
+                  <option value="neural">neural (Multimodal CharCNN+CLIP)</option>
+                  <option value="neural_gnn">neural_gnn (Collective GNN)</option>
+                </select>
+              </div>
+              <div>
+                <label class="field-label" for="param-planner">Expansion Planner</label>
+                <select class="select" id="param-planner">
+                  <option value="rule">rule (RuleBasedPlanner)</option>
+                  <option value="llm">llm (LLMPlanner)</option>
+                  <option value="bandit">bandit (LinUCB BanditPlanner)</option>
+                </select>
+              </div>
+            </div>
           </div>
-          <span class="mono" style="font-size:12px; color: var(--rejected);" id="launch-error"></span>
-        </div>
-      </div>
 
-      <div class="card" style="display:flex; flex-direction:column; gap: var(--space-3);">
-        <div style="display:flex; justify-content:space-between; align-items:center;">
-          <div>
-            <div class="field-label">Saved Snapshots (Quick Access)</div>
-            <div style="font-size:12px; color:var(--text-muted);">Reload previously saved investigations without re-running collectors.</div>
+          <div style="padding: var(--space-4); border-radius: var(--radius-md); background: var(--bg-elevated); border: 1px solid var(--border-subtle);">
+            <label style="display:flex; align-items:flex-start; gap: var(--space-3); cursor:pointer;">
+              <input type="checkbox" id="consent-checkbox" style="margin-top: 3px;">
+              <span style="font-size:13px; color:var(--text-secondary); line-height:1.45;">
+                <strong style="color:var(--text-primary);">Mandatory Authorization Gate:</strong> I confirm authorized, public-data-only reconnaissance for this target scope.
+              </span>
+            </label>
           </div>
-          <button type="button" class="btn btn-sm" id="btn-refresh-saved">Refresh</button>
-        </div>
-        <div id="saved-runs-list" class="mono" style="font-size:12px; color:var(--text-muted);">Loading saved snapshots...</div>
+
+          <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap: var(--space-3);">
+            <div style="display:flex; gap: var(--space-3); flex-wrap:wrap;">
+              <button type="button" class="btn btn-primary" id="btn-launch-scan" disabled>Start Investigation</button>
+              <button type="button" class="btn" id="btn-load-demo">Load Recorded Run</button>
+            </div>
+            <span class="mono" style="font-size:12px; color: var(--rejected);" id="launch-error"></span>
+          </div>
+        </section>
+
+        <aside class="card" style="padding: var(--space-5); display:flex; flex-direction:column; gap: var(--space-4);">
+          <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:var(--space-2);">
+            <div>
+              <div class="field-label">Saved Snapshots</div>
+              <div style="font-size:12px; color:var(--text-muted); line-height:1.45;">Reload saved investigations without re-running collectors.</div>
+            </div>
+            <button type="button" class="btn btn-sm" id="btn-refresh-saved">Refresh</button>
+          </div>
+          <div id="saved-runs-list" class="mono" style="font-size:12px; color:var(--text-muted); display:flex; flex-direction:column; gap:8px;">Loading saved snapshots...</div>
+        </aside>
       </div>
     `;
 
@@ -277,12 +283,12 @@
         return;
       }
       el.innerHTML = runs.map((run) => `
-        <div style="display:flex; align-items:center; justify-content:space-between; gap:8px; padding:8px 10px; border:1px solid var(--border-subtle); border-radius:6px; margin-bottom:6px; background:var(--bg-elevated);">
-          <div>
-            <strong style="color:var(--text-primary);">${esc(run.name)}</strong>
-            <span style="margin-left:8px; color:var(--text-muted);">${run.nodes_count} nodes · ${run.edges_count} edges · ${esc(String(run.created_at || "").slice(0, 16).replace("T", " "))}</span>
+        <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; padding:10px 12px; border:1px solid var(--border-subtle); border-radius:var(--radius-md); background:var(--bg-elevated);">
+          <div style="min-width:0;">
+            <div style="font-family:var(--font-sans); font-size:13px; font-weight:600; color:var(--text-primary); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${esc(run.name)}</div>
+            <div style="margin-top:2px; font-size:11px; color:var(--text-muted);">${run.nodes_count} nodes &middot; ${run.edges_count} edges &middot; ${esc(String(run.created_at || "").slice(0, 16).replace("T", " "))}</div>
           </div>
-          <div style="display:flex; gap:6px;">
+          <div style="display:flex; gap:6px; flex-shrink:0;">
             <button type="button" class="btn btn-sm btn-primary" data-load-saved="${esc(run.id)}">Load</button>
             <button type="button" class="btn btn-sm" data-del-saved="${esc(run.id)}">Delete</button>
           </div>

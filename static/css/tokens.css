@@ -1,4 +1,4 @@
-/* Design Tokens: Precision Obsidian Dark + Porcelain Light (Emil-inspired craft) */
+/* Design Tokens: Intelligent OSINT — Obsidian Dark + Porcelain Light */
 
 :root {
   /* Fonts */
@@ -21,6 +21,7 @@
   --space-4: 16px;
   --space-5: 20px;
   --space-6: 24px;
+  --space-7: 28px;
   --space-8: 32px;
   --space-10: 40px;
 
@@ -30,77 +31,87 @@
   --radius-lg: 14px;
   --radius-pill: 999px;
 
-  /* Dark Theme Surfaces (Obsidian Zinc) */
+  /* Dark Theme Surfaces (Refined Obsidian Zinc) */
   --bg-canvas: #09090b;
   --bg-surface: #111114;
-  --bg-surface-glass: rgba(17, 17, 20, 0.82);
-  --bg-elevated: #18181c;
-  --bg-hover: #222228;
-  --bg-dot: rgba(255, 255, 255, 0.045);
+  --bg-surface-glass: rgba(17, 17, 20, 0.84);
+  --bg-elevated: #18181d;
+  --bg-hover: #222229;
+  --bg-dot: rgba(255, 255, 255, 0.04);
 
   /* Text */
-  --text-primary: #fafafa;
-  --text-secondary: #d4d4d8;
-  --text-muted: #8b8b96;
+  --text-primary: #f4f4f5;
+  --text-secondary: #a1a1aa;
+  --text-muted: #71717a;
 
   /* Hairline Borders */
-  --border-subtle: rgba(255, 255, 255, 0.08);
-  --border-strong: rgba(255, 255, 255, 0.16);
-  --inner-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  --border-subtle: rgba(255, 255, 255, 0.075);
+  --border-strong: rgba(255, 255, 255, 0.15);
+  --inner-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.045);
 
   /* Single Primary Accent */
   --accent: #38bdf8;
   --accent-strong: #0ea5e9;
   --accent-soft: rgba(56, 189, 248, 0.12);
+  --accent-border: rgba(56, 189, 248, 0.35);
   --accent-contrast: #04121f;
 
   /* Semantic Status Colors */
   --confirmed: #22c55e;
-  --confirmed-soft: rgba(34, 197, 94, 0.14);
+  --confirmed-soft: rgba(34, 197, 94, 0.12);
+  --confirmed-border: rgba(34, 197, 94, 0.35);
   --rejected: #ef4444;
-  --rejected-soft: rgba(239, 68, 68, 0.14);
+  --rejected-soft: rgba(239, 68, 68, 0.12);
+  --rejected-border: rgba(239, 68, 68, 0.35);
   --uncertain: #f59e0b;
-  --uncertain-soft: rgba(245, 158, 11, 0.14);
+  --uncertain-soft: rgba(245, 158, 11, 0.12);
+  --uncertain-border: rgba(245, 158, 11, 0.35);
   --error: #f87171;
-  --error-soft: rgba(248, 113, 113, 0.14);
+  --error-soft: rgba(248, 113, 113, 0.12);
 
   /* Focus & Elevation */
   --focus-ring: 0 0 0 2px #09090b, 0 0 0 4px #38bdf8;
-  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.35), 0 8px 24px rgba(0, 0, 0, 0.22);
-  --shadow-drawer: -12px 0 40px rgba(0, 0, 0, 0.65);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.32);
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.36), 0 10px 28px rgba(0, 0, 0, 0.24);
+  --shadow-drawer: -16px 0 48px rgba(0, 0, 0, 0.65);
 }
 
 [data-theme="light"] {
-  --bg-canvas: #fafafa;
+  --bg-canvas: #f8f9fb;
   --bg-surface: #ffffff;
-  --bg-surface-glass: rgba(255, 255, 255, 0.85);
-  --bg-elevated: #f4f4f5;
-  --bg-hover: #e4e4e7;
-  --bg-dot: rgba(9, 9, 11, 0.05);
+  --bg-surface-glass: rgba(255, 255, 255, 0.86);
+  --bg-elevated: #f3f4f6;
+  --bg-hover: #e5e7eb;
+  --bg-dot: rgba(9, 9, 11, 0.045);
 
   --text-primary: #09090b;
-  --text-secondary: #3f3f46;
+  --text-secondary: #52525b;
   --text-muted: #71717a;
 
   --border-subtle: rgba(9, 9, 11, 0.08);
   --border-strong: rgba(9, 9, 11, 0.16);
-  --inner-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.8);
+  --inner-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.85);
 
   --accent: #0284c7;
   --accent-strong: #0369a1;
   --accent-soft: rgba(2, 132, 199, 0.1);
+  --accent-border: rgba(2, 132, 199, 0.32);
   --accent-contrast: #ffffff;
 
   --confirmed: #15803d;
-  --confirmed-soft: rgba(21, 128, 61, 0.11);
+  --confirmed-soft: rgba(21, 128, 61, 0.1);
+  --confirmed-border: rgba(21, 128, 61, 0.3);
   --rejected: #b91c1c;
-  --rejected-soft: rgba(185, 28, 28, 0.11);
+  --rejected-soft: rgba(185, 28, 28, 0.1);
+  --rejected-border: rgba(185, 28, 28, 0.3);
   --uncertain: #b45309;
-  --uncertain-soft: rgba(180, 83, 9, 0.11);
+  --uncertain-soft: rgba(180, 83, 9, 0.1);
+  --uncertain-border: rgba(180, 83, 9, 0.3);
   --error: #dc2626;
-  --error-soft: rgba(220, 38, 38, 0.11);
+  --error-soft: rgba(220, 38, 38, 0.1);
 
   --focus-ring: 0 0 0 2px #ffffff, 0 0 0 4px #0284c7;
-  --shadow-card: 0 1px 2px rgba(9, 9, 11, 0.04), 0 4px 16px rgba(9, 9, 11, 0.04);
-  --shadow-drawer: -12px 0 40px rgba(9, 9, 11, 0.14);
+  --shadow-sm: 0 1px 2px rgba(9, 9, 11, 0.04);
+  --shadow-card: 0 1px 3px rgba(9, 9, 11, 0.05), 0 8px 24px rgba(9, 9, 11, 0.04);
+  --shadow-drawer: -16px 0 48px rgba(9, 9, 11, 0.14);
 }

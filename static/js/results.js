@@ -90,7 +90,7 @@
       "url", "website", "title", "site", "bio", "description",
       "avatar", "avatar_url", "banner", "banner_url", "images",
       "source_tool", "resolver_features", "hand_features",
-      "field_sources", "field_confidence", "ml_keywords", "ml_summary",
+      "field_sources", "field_confidence", "ml_keywords", "ml_summary", "ml_cluster_id",
       "limited_public_data", "status_note", "extra_fields",
       "phone", "phones", "breach", "stealer_family",
     ]);
@@ -119,13 +119,13 @@
       const label = normKey.replace(/_/g, " ");
       if (text.length > 260) {
         rows.push(`
-          <details class="mono" style="font-size:11px; margin-top:2px;" onclick="event.stopPropagation();">
-            <summary style="cursor:pointer; color:var(--text-muted);">${esc(label)} <span style="color:var(--accent);">(${text.length} chars)</span></summary>
-            <div style="margin-top:4px; padding:6px; border-radius:4px; background:var(--bg-elevated); white-space:pre-wrap; word-break:break-word; max-height:180px; overflow:auto;">${esc(text)}</div>
+          <details class="result-kv-row" style="display:block;" onclick="event.stopPropagation();">
+            <summary style="cursor:pointer; color:var(--text-muted); list-style:none;">${esc(label)} <span style="color:var(--accent);">(${text.length} chars)</span></summary>
+            <div style="margin-top:6px; padding:8px 10px; border-radius:var(--radius-sm); background:var(--bg-elevated); white-space:pre-wrap; word-break:break-word; max-height:180px; overflow:auto;">${esc(text)}</div>
           </details>
         `);
       } else {
-        rows.push(`<div class="mono" style="font-size:11px; display:flex; justify-content:space-between; gap:8px; align-items:flex-start;"><span style="color:var(--text-muted); flex-shrink:0;">${esc(label)}</span><span style="text-align:right; word-break:break-word; max-width:72%;">${esc(text)}</span></div>`);
+        rows.push(`<div class="result-kv-row"><span style="color:var(--text-muted); flex-shrink:0;">${esc(label)}</span><span style="text-align:right; word-break:break-word; color:var(--text-primary); max-width:68%;">${esc(text)}</span></div>`);
       }
     };
 
@@ -164,9 +164,9 @@
 
     if (!rows.length && !sensitiveHtml) {
       const note = attrs.status_note || (attrs.limited_public_data ? "Exists, limited public data (login-walled)." : "Found, little public data exposed by source.");
-      return `<div class="state-panel" style="padding: var(--space-2); font-size:11px;">${esc(note)}</div>`;
+      return `<div class="state-panel" style="padding: var(--space-3); font-size:11px;">${esc(note)}</div>`;
     }
-    return `<div style="display:flex; flex-direction:column; gap:4px;">${rows.join("")}${sensitiveHtml}</div>`;
+    return `<div class="result-kv-list">${rows.join("")}${sensitiveHtml}</div>`;
   }
 
   function renderResultCard(node, idx) {
@@ -217,44 +217,41 @@
         aria-label="${esc(d.type)}: ${esc(d.label)}"
       >
         ${bannerHtml}
-        <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:var(--space-3); margin-bottom:var(--space-2);">
-          <div style="display:flex; align-items:center; gap:var(--space-2); min-width:0;">
+        <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:var(--space-3);">
+          <div style="display:flex; align-items:flex-start; gap:10px; min-width:0;">
             ${avatarHtml}
             <div style="min-width:0;">
-              <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
+              <div style="display:flex; align-items:center; gap:5px; flex-wrap:wrap;">
                 <span class="badge badge-accent">${esc(d.type)}</span>
                 <span class="badge">${esc(attrs.site || sourceTool)}</span>
                 <span class="badge">d=${esc(d.depth ?? 0)}</span>
               </div>
-              <h3 title="${esc(rawLabel)}" style="margin:4px 0 0 0; font-size:14px; font-weight:700; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${esc(displayLabel)}</h3>
+              <h3 title="${esc(rawLabel)}" style="margin:6px 0 0 0; font-size:15px; font-weight:600; letter-spacing:-0.01em; line-height:1.35; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden;">${esc(displayLabel)}</h3>
             </div>
           </div>
 
           <div
             title="Calibrated confidence: ${pct}%"
-            style="width:42px; height:42px; flex-shrink:0; border-radius:50%; background:conic-gradient(${ringCol} ${pct * 3.6}deg, var(--bg-elevated) 0deg); display:flex; align-items:center; justify-content:center;"
+            style="width:40px; height:40px; flex-shrink:0; border-radius:50%; background:conic-gradient(${ringCol} ${pct * 3.6}deg, var(--bg-elevated) 0deg); display:flex; align-items:center; justify-content:center;"
           >
-            <span class="mono" style="width:32px; height:32px; border-radius:50%; background:var(--bg-surface); display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:700;">${pct}</span>
+            <span class="mono" style="width:30px; height:30px; border-radius:50%; background:var(--bg-surface); display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:700;">${pct}</span>
           </div>
         </div>
 
-        ${attrs.bio || attrs.description ? `<p style="margin:0 0 8px 0; font-size:12px; color:var(--text-secondary); display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden;">${esc(attrs.bio || attrs.description)}</p>` : ""}
+        ${attrs.bio || attrs.description ? `<p style="margin:0; font-size:12.5px; line-height:1.5; color:var(--text-secondary); display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden;">${esc(attrs.bio || attrs.description)}</p>` : ""}
 
-        <div style="display:flex; flex-wrap:wrap; gap:4px; margin-bottom:8px;">
-          ${chips.map((c) => `<span class="chip">${esc(c)}</span>`).join("")}
-        </div>
+        ${chips.length ? `<div style="display:flex; flex-wrap:wrap; gap:5px;">${chips.map((c) => `<span class="chip">${esc(c)}</span>`).join("")}</div>` : ""}
 
         ${renderEntityFields(d)}
 
-        <div style="margin-top:10px; padding-top:8px; border-top:1px solid var(--border-subtle); display:flex; flex-direction:column; gap:6px;">
-          <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; font-family:var(--font-mono); font-size:11px;">
-            <span>${cov.extracted_count} of ${cov.expected_count} fields</span>
-            ${cov.is_partial ? `<span class="badge badge-uncertain" title="Missing: ${esc((cov.missing_fields || []).join(', '))}">Partial data</span>` : `<span class="badge badge-confirmed">Complete</span>`}
+        <div style="margin-top:auto; padding-top:10px; border-top:1px solid var(--border-subtle); display:flex; flex-direction:column; gap:8px;">
+          <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; font-family:var(--font-mono); font-size:11px; color:var(--text-muted);">
+            <span>${cov.extracted_count} / ${cov.expected_count} fields</span>
+            ${cov.is_partial ? `<span class="badge badge-uncertain" title="Missing: ${esc((cov.missing_fields || []).join(', '))}">Partial</span>` : `<span class="badge badge-confirmed">Complete</span>`}
           </div>
           <div class="progress-track"><div class="progress-fill" style="width:${Math.round(cov.ratio * 100)}%;"></div></div>
-          ${cov.is_partial && cov.missing_fields?.length ? `<div class="mono" style="font-size:10px; color:var(--text-muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">Missing: ${esc(cov.missing_fields.join(", "))}</div>` : ""}
           <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; margin-top:2px;">
-            ${linkOut ? `<a href="${esc(linkOut)}" target="_blank" rel="noopener noreferrer" class="btn btn-sm" onclick="event.stopPropagation();">Open Link</a>` : `<span></span>`}
+            ${linkOut ? `<a href="${esc(linkOut)}" target="_blank" rel="noopener noreferrer" class="btn btn-sm" onclick="event.stopPropagation();">Open Link &#8599;</a>` : `<span></span>`}
             <button type="button" class="btn btn-sm btn-primary" data-inspect-id="${esc(d.id)}">Inspect -&gt;</button>
           </div>
         </div>
@@ -388,20 +385,22 @@
 
     const photoList = Array.from(photos);
     const primaryPhoto = photoList[0] || "";
-    const row = (label, set, isLink) => {
-      const arr = Array.from(set).slice(0, 6);
+    const row = (label, set, isLink, fullWidth = false) => {
+      const arr = Array.from(set).slice(0, fullWidth ? 4 : 5);
       if (!arr.length) return "";
       const vals = arr.map((v) => {
         const cite = supHtml(v);
         const core = isLink
           ? `<a href="${esc(v.startsWith("http") ? v : "https://" + v)}" target="_blank" rel="noopener noreferrer" style="color:var(--accent);">${esc(v)}</a>`
           : esc(v);
-        return `${core}${cite}`;
-      }).join("<br>");
+        return fullWidth
+          ? `<div style="padding:6px 10px; border-left:2px solid var(--border-strong); background:var(--bg-elevated); border-radius:0 6px 6px 0; font-family:var(--font-sans); font-size:12.5px; line-height:1.5;">${core}${cite}</div>`
+          : `${core}${cite}`;
+      }).join(fullWidth ? "" : "<br>");
       return `
-        <div style="padding:8px 0; border-bottom:1px solid var(--border-subtle);">
-          <div class="field-label" style="font-size:10px; margin-bottom:2px;">${esc(label)}</div>
-          <div class="mono" style="font-size:12px; word-break:break-word;">${vals}</div>
+        <div class="dossier-fact-cell" ${fullWidth ? 'style="grid-column: 1 / -1;"' : ""}>
+          <div class="field-label" style="font-size:10px; margin-bottom:6px;">${esc(label)}</div>
+          <div class="mono" style="font-size:12px; line-height:1.6; word-break:break-word; color:var(--text-primary); ${fullWidth ? 'display:flex; flex-direction:column; gap:8px;' : ''}">${vals}</div>
         </div>
       `;
     };
@@ -410,9 +409,9 @@
     if (!hasAny) return "";
 
     const refsHtml = citations.length ? `
-      <details style="margin-top:var(--space-3); padding-top:var(--space-2); border-top:1px solid var(--border-subtle);">
+      <details style="margin-top:var(--space-4); padding-top:var(--space-3); border-top:1px solid var(--border-subtle);">
         <summary class="field-label" style="cursor:pointer; margin-bottom:0;">References &amp; Sources (${citations.length})</summary>
-        <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(240px, 1fr)); gap:6px 16px; margin-top:8px;">
+        <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(240px, 1fr)); gap:8px 20px; margin-top:10px;">
           ${citations.map((c) => `
             <div class="mono" style="font-size:11px; display:flex; align-items:baseline; gap:6px; overflow:hidden;">
               <a href="#card-${esc(c.nodeId)}" class="cite-link" data-cite-node="${esc(c.nodeId)}" style="flex-shrink:0;">[${c.num}]</a>
@@ -424,26 +423,31 @@
     ` : "";
 
     return `
-      <section class="card" style="padding:var(--space-4);">
-        <div style="display:flex; flex-wrap:wrap; gap:var(--space-4); align-items:flex-start;">
-          <div style="display:flex; align-items:center; gap:12px; min-width:220px;">
-            ${primaryPhoto ? `<a href="${esc(primaryPhoto)}" target="_blank" rel="noopener noreferrer"><img src="${esc(primaryPhoto)}" alt="" onerror="this.style.display='none'" style="width:56px; height:56px; border-radius:50%; object-fit:cover; border:1px solid var(--border-strong);"></a>` : ""}
-            <div>
-              <div class="field-label">Subject Identity Dossier</div>
-              <div style="font-weight:700; font-size:16px;">${esc(Array.from(names)[0] || "Aggregated Target Intel")}</div>
-              ${photoList.length ? `
-                <div style="display:flex; flex-wrap:wrap; align-items:center; gap:4px; margin-top:6px;">
-                  ${photoList.slice(0, 6).map((u) => `
+      <section class="card dossier-card">
+        <div class="dossier-layout">
+          <div class="dossier-profile-col">
+            <div style="display:flex; align-items:center; gap:14px;">
+              ${primaryPhoto ? `<a href="${esc(primaryPhoto)}" target="_blank" rel="noopener noreferrer" style="flex-shrink:0;"><img src="${esc(primaryPhoto)}" alt="" class="dossier-avatar" onerror="this.style.display='none'"></a>` : ""}
+              <div style="min-width:0;">
+                <div class="field-label" style="margin-bottom:2px;">Subject Identity Dossier</div>
+                <div style="font-weight:700; font-size:19px; letter-spacing:-0.02em; line-height:1.2; word-break:break-word;">${esc(Array.from(names)[0] || "Aggregated Target Intel")}</div>
+                ${roles.size ? `<div style="margin-top:4px; font-size:12px; color:var(--text-secondary);">${esc(Array.from(roles)[0])}</div>` : ""}
+              </div>
+            </div>
+            ${photoList.length ? `
+              <div style="display:flex; flex-direction:column; gap:8px; margin-top:4px;">
+                <div style="display:flex; flex-wrap:wrap; align-items:center; gap:6px;">
+                  ${photoList.slice(0, 5).map((u) => `
                     <a href="${esc(u)}" class="dossier-photo-trigger" title="Open Gallery">
-                      <img src="${esc(u)}" alt="" loading="lazy" onerror="this.parentElement.style.display='none'" style="width:30px; height:30px; border-radius:4px; object-fit:cover; border:1px solid var(--border-subtle);">
+                      <img src="${esc(u)}" alt="" loading="lazy" onerror="this.parentElement.style.display='none'" style="width:38px; height:38px; border-radius:6px; object-fit:cover; border:1px solid var(--border-subtle);">
                     </a>
                   `).join("")}
-                  <button type="button" class="btn btn-sm" id="btn-open-photo-gallery" style="font-size:11px; padding:3px 8px;">Gallery (${photoList.length})</button>
                 </div>
-              ` : ""}
-            </div>
+                <button type="button" class="btn btn-sm" id="btn-open-photo-gallery" style="align-self:flex-start;">Open Gallery (${photoList.length})</button>
+              </div>
+            ` : ""}
           </div>
-          <div style="flex:1; min-width:280px; display:grid; grid-template-columns:repeat(auto-fit, minmax(190px, 1fr)); gap:0 var(--space-4);">
+          <div class="dossier-facts-grid">
             ${row("Names & Aliases", names, false)}
             ${row("Roles & Titles", roles, false)}
             ${row("Emails", emails, false)}
@@ -455,7 +459,7 @@
             ${row("Skills & Research", skills, false)}
             ${row("Projects & Publications", projects, false)}
             ${row("Domains & Websites", websites, true)}
-            ${row("Profile Summary", summaries, false)}
+            ${row("Profile Summary", summaries, false, true)}
           </div>
         </div>
         ${refsHtml}
@@ -517,12 +521,12 @@
     const dossierHtml = buildDossierHtml(allNodes);
 
     container.innerHTML = `
-      <div class="card" style="display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:var(--space-3);">
-        <div style="display:flex; flex-wrap:wrap; gap:6px;">
+      <div class="card" style="padding:14px 18px; display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:var(--space-3);">
+        <div class="segmented-bar">
           ${types.map((t) => `<button type="button" class="tab-btn ${typeFilter === t ? "active" : ""}" data-rtype="${esc(t)}">${esc(t)}</button>`).join("")}
         </div>
-        <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
-          <label class="mono" style="font-size:11px; color:var(--text-muted);" for="filter-min-conf">Min Conf: <strong id="lbl-min-conf">${Math.round(minConfFilter * 100)}%</strong></label>
+        <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
+          <label class="mono" style="font-size:11px; color:var(--text-muted);" for="filter-min-conf">Min Conf: <strong id="lbl-min-conf" style="color:var(--text-primary);">${Math.round(minConfFilter * 100)}%</strong></label>
           <input type="range" id="filter-min-conf" min="0" max="0.9" step="0.1" value="${minConfFilter}">
           <span class="badge">${visible.length} / ${filtered.length}</span>
           ${allNodes.length ? `<button type="button" class="btn btn-sm btn-primary" id="btn-save-snapshot">Save Snapshot</button>` : ""}
@@ -533,7 +537,7 @@
 
       <div>
         ${visible.length ? `
-          <div id="results-cards-grid" style="display:grid; grid-template-columns:repeat(auto-fill, minmax(280px, 1fr)); gap:var(--space-3);">
+          <div id="results-cards-grid" style="display:grid; grid-template-columns:repeat(auto-fill, minmax(310px, 1fr)); gap:16px;">
             ${visible.map((n, i) => renderResultCard(n, i)).join("")}
           </div>
           ${filtered.length > visibleLimit ? `

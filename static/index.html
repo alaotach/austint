@@ -7,9 +7,9 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/css/tokens.css?v=4">
-  <link rel="stylesheet" href="/static/css/components.css?v=4">
-  <link rel="stylesheet" href="/static/css/app.css?v=4">
+  <link rel="stylesheet" href="/static/css/tokens.css?v=5">
+  <link rel="stylesheet" href="/static/css/components.css?v=5">
+  <link rel="stylesheet" href="/static/css/app.css?v=5">
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="">
   <script src="https://unpkg.com/cytoscape@3.30.2/dist/cytoscape.min.js" crossorigin=""></script>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
@@ -18,8 +18,8 @@
 <body>
   <header class="app-header">
     <div class="brand-group">
+      <span class="brand-mark" aria-hidden="true">AI</span>
       <span class="brand-title">Intelligent OSINT</span>
-      <span class="badge badge-accent">ML + GNN Engine</span>
       <span class="badge" id="status-pill">
         <span class="status-dot" id="system-status-dot"></span>
         <span id="system-status-text">Idle</span>
@@ -27,9 +27,13 @@
     </div>
 
     <div class="header-controls">
-      <span class="badge">Job: <strong id="header-job-id">--</strong></span>
-      <span class="badge">Nodes: <strong id="header-node-count">0</strong></span>
-      <span class="badge">Edges: <strong id="header-edge-count">0</strong></span>
+      <div class="header-telemetry" aria-label="Session Telemetry">
+        <span>Job <strong id="header-job-id">--</strong></span>
+        <span>&middot;</span>
+        <span><strong id="header-node-count">0</strong> nodes</span>
+        <span>&middot;</span>
+        <span><strong id="header-edge-count">0</strong> edges</span>
+      </div>
       <input
         type="search"
         id="global-search"
@@ -43,13 +47,18 @@
 
   <div class="app-shell">
     <nav class="nav-rail" aria-label="Primary Views">
-      <button type="button" class="nav-item active" data-view="launch"><span>1. Launch</span></button>
-      <button type="button" class="nav-item" data-view="scan"><span>2. Live Scan</span><span class="badge" id="nav-badge-scan">0/0</span></button>
-      <button type="button" class="nav-item" data-view="results"><span>3. Results</span><span class="badge" id="nav-badge-results">0</span></button>
-      <button type="button" class="nav-item" data-view="graph"><span>4. Graph</span></button>
-      <button type="button" class="nav-item" data-view="timeline"><span>5. Timeline / Map</span></button>
-      <button type="button" class="nav-item" data-view="audit"><span>6. Audit &amp; Planner</span><span class="badge" id="nav-badge-audit">0</span></button>
-      <button type="button" class="nav-item" data-view="report"><span>7. Report</span></button>
+      <div class="nav-section-label">Workflow</div>
+      <button type="button" class="nav-item active" data-view="launch"><span>Launch</span></button>
+      <button type="button" class="nav-item" data-view="scan"><span>Live Scan</span><span class="badge" id="nav-badge-scan">0/0</span></button>
+
+      <div class="nav-section-label">Intelligence</div>
+      <button type="button" class="nav-item" data-view="results"><span>Results</span><span class="badge" id="nav-badge-results">0</span></button>
+      <button type="button" class="nav-item" data-view="graph"><span>Knowledge Graph</span></button>
+      <button type="button" class="nav-item" data-view="timeline"><span>Timeline &amp; Map</span></button>
+
+      <div class="nav-section-label">Governance</div>
+      <button type="button" class="nav-item" data-view="audit"><span>Audit &amp; Planner</span><span class="badge" id="nav-badge-audit">0</span></button>
+      <button type="button" class="nav-item" data-view="report"><span>Report</span></button>
     </nav>
 
     <main class="main-workspace" id="main-workspace">
@@ -60,7 +69,7 @@
             <p class="view-subtitle">Public-source reconnaissance with mandatory authorization consent gate.</p>
           </div>
         </div>
-        <div class="card" id="launch-container">
+        <div id="launch-container">
           <div class="state-panel">Launch workspace initializing...</div>
         </div>
       </section>
@@ -83,8 +92,8 @@
       <section class="view-section" id="view-results" aria-labelledby="title-results">
         <div class="view-header">
           <div>
-            <h1 class="view-title" id="title-results">Result Cards</h1>
-            <p class="view-subtitle">Calibrated confidence, resolver feature chips, and field coverage.</p>
+            <h1 class="view-title" id="title-results">Intelligence Dossier &amp; Results</h1>
+            <p class="view-subtitle">Source-cited identity dossier, calibrated confidence, and field coverage.</p>
           </div>
         </div>
         <div id="results-container">
@@ -108,7 +117,7 @@
         <div class="view-header">
           <div>
             <h1 class="view-title" id="title-timeline">Timeline &amp; Geo Map</h1>
-            <p class="view-subtitle">Dated events and OSM map coordinates (places &amp; EXIF/GPS).</p>
+            <p class="view-subtitle">Dated events, career milestones, and OSM map coordinates.</p>
           </div>
         </div>
         <div id="timeline-container">
@@ -132,7 +141,7 @@
         <div class="view-header">
           <div>
             <h1 class="view-title" id="title-report">Investigation Report</h1>
-            <p class="view-subtitle">One-page summary with JSON export and print-to-PDF.</p>
+            <p class="view-subtitle">One-page executive summary with JSON export and print-to-PDF.</p>
           </div>
         </div>
         <div id="report-container">
@@ -145,9 +154,9 @@
   <div class="drawer-backdrop" id="inspector-backdrop" aria-hidden="true"></div>
   <aside class="drawer" id="inspector-drawer" role="dialog" aria-modal="true" aria-label="Entity Inspector" aria-hidden="true">
     <div class="drawer-header">
-      <div>
+      <div style="min-width:0;">
         <div class="mono" style="font-size: 11px; color: var(--text-muted);" id="inspector-type">NODE INSPECTOR</div>
-        <strong id="inspector-title">Select a node</strong>
+        <strong id="inspector-title" style="display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">Select a node</strong>
       </div>
       <button type="button" class="btn btn-sm" id="inspector-close" aria-label="Close Inspector">Esc</button>
     </div>
@@ -159,9 +168,9 @@
   <div class="toast-stack" id="toast-stack" aria-live="polite"></div>
 
   <script src="/static/js/app.js?v=2"></script>
-  <script src="/static/js/launch_scan.js?v=8"></script>
-  <script src="/static/js/results.js?v=17"></script>
-  <script src="/static/js/inspector.js?v=2"></script>
+  <script src="/static/js/launch_scan.js?v=9"></script>
+  <script src="/static/js/results.js?v=19"></script>
+  <script src="/static/js/inspector.js?v=3"></script>
   <script src="/static/js/graph_view.js?v=1"></script>
   <script src="/static/js/timeline_map.js?v=2"></script>
   <script src="/static/js/audit_report.js?v=2"></script>

@@ -65,7 +65,7 @@
       const conf = Number(d.confidence ?? 0.5);
       const cov = d.field_coverage || { extracted_count: 0, expected_count: 0, missing_fields: [] };
       const kvRows = Object.entries(attrs)
-        .filter(([k]) => !["resolver_features", "hand_features", "phone", "phones", "breach", "stealer_family", "images", "avatar_url", "avatar", "banner_url", "banner"].includes(k))
+        .filter(([k]) => !["resolver_features", "hand_features", "field_sources", "field_confidence", "ml_keywords", "ml_summary", "ml_cluster_id", "phone", "phones", "breach", "stealer_family", "images", "avatar_url", "avatar", "banner_url", "banner"].includes(k))
         .slice(0, 14);
       const imgs = Array.from(new Set([
         ...(attrs.avatar_url ? [attrs.avatar_url] : []),
