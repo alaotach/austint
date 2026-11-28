@@ -95,13 +95,13 @@
   function openInspector(nodeId) {
     lastFocusedEl = document.activeElement;
     state.selectedNodeId = nodeId || null;
-    const drawer = document.getElementById("inspector-drawer");
+    const modal = document.getElementById("inspector-drawer");
     const backdrop = document.getElementById("inspector-backdrop");
-    if (backdrop) backdrop.classList.add("open");
-    if (drawer) {
-      drawer.classList.add("open");
-      drawer.setAttribute("aria-hidden", "false");
+    if (backdrop) {
+      backdrop.classList.add("open");
+      backdrop.setAttribute("aria-hidden", "false");
     }
+    if (modal) modal.classList.add("open");
     if (typeof window.renderInspector === "function") {
       window.renderInspector(nodeId);
     }
@@ -111,13 +111,13 @@
   }
 
   function closeInspector() {
-    const drawer = document.getElementById("inspector-drawer");
+    const modal = document.getElementById("inspector-drawer");
     const backdrop = document.getElementById("inspector-backdrop");
-    if (backdrop) backdrop.classList.remove("open");
-    if (drawer) {
-      drawer.classList.remove("open");
-      drawer.setAttribute("aria-hidden", "true");
+    if (backdrop) {
+      backdrop.classList.remove("open");
+      backdrop.setAttribute("aria-hidden", "true");
     }
+    if (modal) modal.classList.remove("open");
     if (lastFocusedEl && typeof lastFocusedEl.focus === "function") {
       lastFocusedEl.focus({ preventScroll: true });
       lastFocusedEl = null;
@@ -331,24 +331,17 @@
     });
 
     document.getElementById("inspector-close")?.addEventListener("click", closeInspector);
-    document.getElementById("inspector-backdrop")?.addEventListener("click", closeInspector);
+    const inspectorBackdrop = document.getElementById("inspector-backdrop");
+    inspectorBackdrop?.addEventListener("click", (e) => {
+      if (e.target === inspectorBackdrop) closeInspector();
+    });
 
-    const drawerEl = document.getElementById("inspector-drawer");
-    if (drawerEl) {
-      let dragStartX = 0;
-      let dragStartTime = 0;
-      drawerEl.addEventListener("pointerdown", (e) => {
-        dragStartX = e.clientX;
-        dragStartTime = Date.now();
-      });
-      drawerEl.addEventListener("pointerup", (e) => {
-        const dx = e.clientX - dragStartX;
-        const dt = Math.max(1, Date.now() - dragStartTime);
-        if (dx > 24 && (dx / dt > 0.11 || dx > 120)) closeInspector();
-      });
-      drawerEl.addEventListener("keydown", (e) => {
-        if (e.key !== "Tab" || !drawerEl.classList.contains("open")) return;
-        const focusables = drawerEl.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])');
+    // Focus trap inside centered Inspector Modal
+    const modalEl = document.getElementById("inspector-drawer");
+    if (modalEl) {
+      modalEl.addEventListener("keydown", (e) => {
+        if (e.key !== "Tab" || !inspectorBackdrop?.classList.contains("open")) return;
+        const focusables = modalEl.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])');
         if (!focusables.length) return;
         const first = focusables[0];
         const last = focusables[focusables.length - 1];

@@ -5,6 +5,7 @@
 
   let typeFilter = "all";
   let minConfFilter = 0;
+  let cardViewMode = "compact"; // "compact" (default) | "detailed"
   let currentPage = 1;
   const PAGE_SIZE = 36;
   const dismissedFacts = new Set();
@@ -226,6 +227,52 @@
     const avatarHtml = attrs.avatar || attrs.avatar_url
       ? `<img src="${esc(attrs.avatar || attrs.avatar_url)}" alt="" width="34" height="34" loading="lazy" onerror="this.style.display='none'" style="border-radius:50%; object-fit:cover; border:1px solid var(--border-strong); flex-shrink:0;">`
       : "";
+
+    if (cardViewMode === "compact") {
+      const mainSnippet = [attrs.job_title, attrs.headline, attrs.location, attrs.email, attrs.bio, attrs.description]
+        .find((v) => typeof v === "string" && v.trim()) || "";
+      return `
+        <article
+          id="card-${esc(d.id)}"
+          class="card card-interactive result-card ${selected}"
+          tabindex="0"
+          data-node-id="${esc(d.id)}"
+          data-card-index="${idx}"
+          aria-label="${esc(d.type)}: ${esc(displayLabel)}"
+        >
+          <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:var(--space-3);">
+            <div style="display:flex; align-items:flex-start; gap:10px; min-width:0;">
+              ${avatarHtml}
+              <div style="min-width:0;">
+                <div style="display:flex; align-items:center; gap:5px; flex-wrap:wrap;">
+                  <span class="badge badge-accent">${esc(d.type)}</span>
+                  <span class="badge">${esc(attrs.site || sourceTool)}</span>
+                  <span class="badge">d=${esc(d.depth ?? 0)}</span>
+                </div>
+                <h3 title="${esc(rawLabel)}" style="margin:6px 0 0 0; font-size:15px; font-weight:600; letter-spacing:-0.01em; line-height:1.35; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden;">${esc(displayLabel)}</h3>
+              </div>
+            </div>
+
+            <div
+              data-tooltip="Calibrated confidence: ${pct}%"
+              style="width:40px; height:40px; flex-shrink:0; border-radius:50%; background:conic-gradient(${ringCol} ${pct * 3.6}deg, var(--bg-elevated) 0deg); display:flex; align-items:center; justify-content:center;"
+            >
+              <span class="mono" style="width:30px; height:30px; border-radius:50%; background:var(--bg-surface); display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:700;">${pct}</span>
+            </div>
+          </div>
+
+          ${mainSnippet ? `<p style="margin:0; font-size:12.5px; line-height:1.45; color:var(--text-secondary); display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden;">${esc(mainSnippet)}</p>` : ""}
+
+          <div style="margin-top:auto; padding-top:10px; border-top:1px solid var(--border-subtle); display:flex; justify-content:space-between; align-items:center; gap:8px;">
+            <span class="mono" style="font-size:11px; color:var(--text-muted);">${cov.extracted_count}/${cov.expected_count} fields</span>
+            <div style="display:flex; align-items:center; gap:6px;">
+              ${linkOut ? `<a href="${esc(linkOut)}" target="_blank" rel="noopener noreferrer" class="btn btn-xs" onclick="event.stopPropagation();">Open &#8599;</a>` : ""}
+              <button type="button" class="btn btn-xs btn-primary" data-inspect-id="${esc(d.id)}">Details &rarr;</button>
+            </div>
+          </div>
+        </article>
+      `;
+    }
 
     return `
       <article
@@ -571,7 +618,11 @@
         <div class="segmented-bar">
           ${types.map((t) => `<button type="button" class="tab-btn ${typeFilter === t ? "active" : ""}" data-rtype="${esc(t)}">${esc(t)}</button>`).join("")}
         </div>
-        <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
+        <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+          <div class="segmented-bar" role="group" aria-label="Card Layout Mode">
+            <button type="button" class="tab-btn ${cardViewMode === "compact" ? "active" : ""}" data-cview="compact">Compact</button>
+            <button type="button" class="tab-btn ${cardViewMode === "detailed" ? "active" : ""}" data-cview="detailed">Detailed</button>
+          </div>
           <label class="mono" style="font-size:11px; color:var(--text-muted);" for="filter-min-conf">Min Conf: <strong id="lbl-min-conf" style="color:var(--text-primary);">${Math.round(minConfFilter * 100)}%</strong></label>
           <input type="range" id="filter-min-conf" min="0" max="0.9" step="0.1" value="${minConfFilter}">
           <span class="badge" data-tooltip="Deduplicated unique entities vs total raw graph nodes">${deduped.length} unique (${allNodes.length} nodes)</span>
@@ -672,6 +723,13 @@
       btn.addEventListener("click", () => {
         typeFilter = btn.dataset.rtype;
         currentPage = 1;
+        renderResultsView();
+      });
+    });
+
+    container.querySelectorAll("[data-cview]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        cardViewMode = btn.dataset.cview === "detailed" ? "detailed" : "compact";
         renderResultsView();
       });
     });
