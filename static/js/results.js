@@ -614,6 +614,8 @@
     const dossierHtml = buildDossierHtml(allNodes);
 
     container.innerHTML = `
+      ${dossierHtml}
+
       <div class="sticky-filter-bar" style="display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:var(--space-3);">
         <div class="segmented-bar">
           ${types.map((t) => `<button type="button" class="tab-btn ${typeFilter === t ? "active" : ""}" data-rtype="${esc(t)}">${esc(t)}</button>`).join("")}
@@ -629,8 +631,6 @@
           ${allNodes.length ? `<button type="button" class="btn btn-sm btn-primary" id="btn-save-snapshot">Save Snapshot</button>` : ""}
         </div>
       </div>
-
-      ${dossierHtml}
 
       <div style="display:flex; flex-direction:column; gap:var(--space-4);">
         ${visible.length ? `
