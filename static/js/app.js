@@ -1,4 +1,4 @@
-/* Intelligent OSINT Dashboard Controller (M1 App Shell + Navigation + Theme + Keyboard) */
+/* Intelligent OSINT Dashboard Controller (App Shell, Run State Machine, Tooltips, Toasts, Shortcuts) */
 
 (function () {
   "use strict";
@@ -6,6 +6,7 @@
   const state = {
     activeView: "launch",
     theme: localStorage.getItem("osint_theme") || "dark",
+    runState: "idle", // idle | running | completed | stopped | partial | error
     jobId: null,
     nodes: [],
     edges: [],
@@ -15,6 +16,54 @@
   };
 
   window.OSINT_STATE = state;
+
+  const RUN_STATE_LABELS = {
+    idle: "Idle",
+    running: "Scanning",
+    completed: "Completed",
+    stopped: "Stopped",
+    partial: "Partial",
+    error: "Error",
+  };
+
+  function setRunState(nextState, customLabel) {
+    const valid = ["idle", "running", "completed", "stopped", "partial", "error"].includes(nextState)
+      ? nextState
+      : "idle";
+    state.runState = valid;
+    const dot = document.getElementById("system-status-dot");
+    const txt = document.getElementById("system-status-text");
+    const pill = document.getElementById("status-pill");
+    if (dot) dot.className = "status-dot " + valid;
+    if (txt) txt.textContent = customLabel || RUN_STATE_LABELS[valid] || "Idle";
+    if (pill) {
+      pill.className = "badge " + (
+        valid === "running" ? "badge-running" :
+        valid === "completed" ? "badge-done" :
+        valid === "partial" ? "badge-unavailable" :
+        (valid === "stopped" || valid === "error") ? "badge-error" : "badge-waiting"
+      );
+    }
+    const stopBtn = document.getElementById("btn-stop-scan");
+    if (stopBtn) stopBtn.disabled = valid !== "running";
+  }
+
+  function decodeEntities(str) {
+    if (str == null) return "";
+    const s = String(str);
+    if (!s.includes("&")) return s;
+    const el = document.createElement("textarea");
+    el.innerHTML = s;
+    return el.value;
+  }
+
+  function esc(str) {
+    return decodeEntities(str)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
 
   function applyTheme(theme) {
     state.theme = theme === "light" ? "light" : "dark";
@@ -29,7 +78,9 @@
   function switchView(viewName) {
     state.activeView = viewName;
     document.querySelectorAll(".nav-item").forEach((btn) => {
-      btn.classList.toggle("active", btn.dataset.view === viewName);
+      const isAct = btn.dataset.view === viewName;
+      btn.classList.toggle("active", isAct);
+      btn.setAttribute("aria-current", isAct ? "page" : "false");
     });
     document.querySelectorAll(".view-section").forEach((sec) => {
       sec.classList.toggle("active", sec.id === "view-" + viewName);
@@ -73,7 +124,7 @@
     }
   }
 
-  function toast(message, variant = "info") {
+  function toast(message, variant = "info", opts = {}) {
     const stack = document.getElementById("toast-stack");
     if (!stack) return;
     while (stack.children.length >= 4) {
@@ -84,25 +135,41 @@
     el.setAttribute("role", "status");
     const span = document.createElement("span");
     span.textContent = String(message || "");
-    const closeBtn = document.createElement("button");
-    closeBtn.type = "button";
-    closeBtn.className = "btn btn-sm";
-    closeBtn.textContent = "x";
-    closeBtn.setAttribute("aria-label", "Dismiss notification");
-    el.append(span, closeBtn);
-    stack.appendChild(el);
-    requestAnimationFrame(() => el.classList.add("open"));
+    span.style.flex = "1";
+    el.appendChild(span);
 
     const dismiss = () => {
       el.classList.remove("open");
       setTimeout(() => el.remove(), 220);
     };
-    let timer = setTimeout(dismiss, 3500);
+
+    if (opts && opts.actionLabel && typeof opts.onAction === "function") {
+      const actBtn = document.createElement("button");
+      actBtn.type = "button";
+      actBtn.className = "btn btn-xs btn-primary";
+      actBtn.textContent = opts.actionLabel;
+      actBtn.addEventListener("click", () => {
+        opts.onAction();
+        dismiss();
+      });
+      el.appendChild(actBtn);
+    }
+
+    const closeBtn = document.createElement("button");
+    closeBtn.type = "button";
+    closeBtn.className = "btn btn-xs";
+    closeBtn.textContent = "x";
+    closeBtn.setAttribute("aria-label", "Dismiss notification");
+    el.appendChild(closeBtn);
+    stack.appendChild(el);
+    requestAnimationFrame(() => el.classList.add("open"));
+
+    const duration = Number(opts?.duration) || (opts?.actionLabel ? 6000 : 3500);
+    let timer = setTimeout(dismiss, duration);
     el.addEventListener("mouseenter", () => clearTimeout(timer));
-    el.addEventListener("mouseleave", () => { timer = setTimeout(dismiss, 1800); });
+    el.addEventListener("mouseleave", () => { timer = setTimeout(dismiss, 2000); });
     closeBtn.addEventListener("click", dismiss);
 
-    // Swipe-to-dismiss with momentum (emil-design-eng)
     let startX = 0;
     let startTime = 0;
     el.addEventListener("pointerdown", (e) => {
@@ -116,39 +183,156 @@
     });
   }
 
+  /* Shared Origin-Aware Tooltip Provider (skips delay & animation on subsequent hovers) */
+  function initTooltipProvider() {
+    let tipEl = document.getElementById("osint-tooltip-popover");
+    if (!tipEl) {
+      tipEl = document.createElement("div");
+      tipEl.id = "osint-tooltip-popover";
+      tipEl.className = "tooltip-popover";
+      tipEl.setAttribute("role", "tooltip");
+      document.body.appendChild(tipEl);
+    }
+    let openTimer = null;
+    let warmUntil = 0;
+    let activeTarget = null;
+
+    const positionTip = (target) => {
+      const r = target.getBoundingClientRect();
+      const pad = 8;
+      tipEl.style.left = "0px";
+      tipEl.style.top = "0px";
+      const tw = tipEl.offsetWidth || 180;
+      const th = tipEl.offsetHeight || 32;
+      let top = r.bottom + pad;
+      let originY = "top";
+      if (top + th > window.innerHeight - 10) {
+        top = Math.max(8, r.top - th - pad);
+        originY = "bottom";
+      }
+      let left = r.left + r.width / 2 - tw / 2;
+      left = Math.max(8, Math.min(window.innerWidth - tw - 8, left));
+      tipEl.style.setProperty("--transform-origin", `${originY} center`);
+      tipEl.style.left = `${Math.round(left)}px`;
+      tipEl.style.top = `${Math.round(top)}px`;
+    };
+
+    const showTip = (target) => {
+      const text = target.getAttribute("data-tooltip");
+      if (!text) return;
+      const isInstant = Date.now() < warmUntil;
+      tipEl.setAttribute("data-instant", isInstant ? "true" : "false");
+      tipEl.textContent = text;
+      positionTip(target);
+      tipEl.classList.add("open");
+      warmUntil = Date.now() + 650;
+    };
+
+    const hideTip = () => {
+      clearTimeout(openTimer);
+      activeTarget = null;
+      tipEl.classList.remove("open");
+      if (tipEl.classList.contains("open") || warmUntil > Date.now()) {
+        warmUntil = Date.now() + 450;
+      }
+    };
+
+    document.addEventListener("pointerover", (e) => {
+      const t = e.target?.closest?.("[data-tooltip]");
+      if (!t || t === activeTarget) return;
+      activeTarget = t;
+      clearTimeout(openTimer);
+      if (Date.now() < warmUntil) {
+        showTip(t);
+      } else {
+        openTimer = setTimeout(() => showTip(t), 260);
+      }
+    });
+    document.addEventListener("pointerout", (e) => {
+      if (!activeTarget) return;
+      if (!e.relatedTarget || !activeTarget.contains(e.relatedTarget)) {
+        hideTip();
+      }
+    });
+    window.addEventListener("scroll", hideTip, true);
+  }
+
+  function openShortcutsModal() {
+    if (document.getElementById("osint-shortcuts-modal")) return;
+    const prev = document.activeElement;
+    const modal = document.createElement("div");
+    modal.id = "osint-shortcuts-modal";
+    modal.className = "modal-backdrop";
+    modal.setAttribute("role", "dialog");
+    modal.setAttribute("aria-modal", "true");
+    modal.setAttribute("aria-label", "Keyboard Shortcuts");
+    modal.innerHTML = `
+      <div class="card modal-dialog" style="width:min(480px, 100%); gap:14px;">
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+          <div>
+            <div class="field-label" style="margin-bottom:2px;">Navigation &amp; Controls</div>
+            <strong style="font-size:16px;">Keyboard Shortcuts</strong>
+          </div>
+          <button type="button" class="btn btn-sm" id="btn-close-shortcuts">Esc</button>
+        </div>
+        <div style="display:flex; flex-direction:column; gap:8px; font-size:13px;">
+          <div style="display:flex; justify-content:space-between; padding:6px 0; border-bottom:1px solid var(--border-subtle);"><span>Focus global node search</span><kbd>/</kbd></div>
+          <div style="display:flex; justify-content:space-between; padding:6px 0; border-bottom:1px solid var(--border-subtle);"><span>Switch views (Launch .. Report)</span><span><kbd>1</kbd> – <kbd>7</kbd></span></div>
+          <div style="display:flex; justify-content:space-between; padding:6px 0; border-bottom:1px solid var(--border-subtle);"><span>Navigate result cards</span><span><kbd>&larr;</kbd> <kbd>&rarr;</kbd></span></div>
+          <div style="display:flex; justify-content:space-between; padding:6px 0; border-bottom:1px solid var(--border-subtle);"><span>Close drawer or modal</span><kbd>Esc</kbd></div>
+          <div style="display:flex; justify-content:space-between; padding:6px 0;"><span>Show this shortcuts dialog</span><kbd>?</kbd></div>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(modal);
+    requestAnimationFrame(() => modal.classList.add("open"));
+    const close = () => {
+      modal.classList.remove("open");
+      document.removeEventListener("keydown", onKey);
+      setTimeout(() => modal.remove(), 200);
+      if (prev && typeof prev.focus === "function") prev.focus({ preventScroll: true });
+    };
+    const onKey = (e) => {
+      if (e.key === "Escape") close();
+    };
+    modal.addEventListener("click", (e) => { if (e.target === modal) close(); });
+    document.getElementById("btn-close-shortcuts")?.addEventListener("click", close);
+    document.getElementById("btn-close-shortcuts")?.focus({ preventScroll: true });
+    document.addEventListener("keydown", onKey);
+  }
+
   window.OSINT_UI = {
     switchView,
     openInspector,
     closeInspector,
     applyTheme,
+    setRunState,
     toast,
+    decodeEntities,
+    esc,
+    openShortcutsModal,
   };
 
   document.addEventListener("DOMContentLoaded", () => {
     applyTheme(state.theme);
+    setRunState("idle");
+    initTooltipProvider();
 
-    const themeBtn = document.getElementById("theme-toggle");
-    if (themeBtn) {
-      themeBtn.addEventListener("click", () => {
-        applyTheme(state.theme === "dark" ? "light" : "dark");
-      });
-    }
+    document.getElementById("theme-toggle")?.addEventListener("click", () => {
+      applyTheme(state.theme === "dark" ? "light" : "dark");
+    });
+
+    document.getElementById("btn-shortcuts")?.addEventListener("click", openShortcutsModal);
 
     document.querySelectorAll(".nav-item").forEach((btn) => {
       btn.addEventListener("click", () => {
-        if (btn.dataset.view) {
-          switchView(btn.dataset.view);
-        }
+        if (btn.dataset.view) switchView(btn.dataset.view);
       });
     });
 
-    const closeBtn = document.getElementById("inspector-close");
-    if (closeBtn) {
-      closeBtn.addEventListener("click", closeInspector);
-    }
+    document.getElementById("inspector-close")?.addEventListener("click", closeInspector);
     document.getElementById("inspector-backdrop")?.addEventListener("click", closeInspector);
 
-    // Drawer swipe-right-to-dismiss with velocity check & focus trap
     const drawerEl = document.getElementById("inspector-drawer");
     if (drawerEl) {
       let dragStartX = 0;
@@ -186,15 +370,27 @@
           window.onSearchChanged(state.searchQuery);
         }
       });
+      searchInput.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" && state.activeView === "graph" && typeof window.focusGraphSearchNode === "function") {
+          window.focusGraphSearchNode(state.searchQuery);
+        }
+      });
     }
 
+    const VIEW_KEYS = ["launch", "scan", "results", "graph", "timeline", "audit", "report"];
     document.addEventListener("keydown", (e) => {
       const tag = (e.target && e.target.tagName) ? e.target.tagName.toLowerCase() : "";
       const isTyping = tag === "input" || tag === "textarea" || tag === "select";
 
       if (e.key === "/" && !isTyping) {
         e.preventDefault();
-        if (searchInput) searchInput.focus();
+        searchInput?.focus();
+      } else if (e.key === "?" && !isTyping) {
+        e.preventDefault();
+        openShortcutsModal();
+      } else if (!isTyping && e.key >= "1" && e.key <= "7") {
+        const idx = Number(e.key) - 1;
+        if (VIEW_KEYS[idx]) switchView(VIEW_KEYS[idx]);
       } else if (e.key === "Escape") {
         closeInspector();
       }

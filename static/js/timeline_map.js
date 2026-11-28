@@ -1,16 +1,24 @@
-/* M5: Timeline & Leaflet OSM Map View */
+/* M5: Timeline & Leaflet OSM Map View (Normalized, Year-Grouped, Conditional Map Space) */
 
 (function () {
   "use strict";
 
   let mapInstance = null;
 
-  function esc(str) {
-    return String(str ?? "")
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;");
+  const esc = (str) => (window.OSINT_UI?.esc ? window.OSINT_UI.esc(str) : String(str ?? "")
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"));
+
+  function normalizeLabel(raw) {
+    let s = String(raw || "").trim();
+    if (/^https?:\/\//i.test(s)) {
+      s = s.replace(/^https?:\/\/(www\.)?/i, "").replace(/\/+$/, "");
+    }
+    return s.replace(/\s+/g, " ");
+  }
+
+  function extractYear(dateStr) {
+    const m = String(dateStr || "").match(/\b((?:19|20)\d{2})\b/);
+    return m ? m[1] : "Undated / Milestone";
   }
 
   function renderTimelineMapView() {
@@ -25,10 +33,12 @@
     const pushDated = (id, type, label, dateStr) => {
       const ds = String(dateStr || "").trim();
       if (!ds) return;
-      const key = `${id}|${ds}|${label}`;
-      if (seenTl.has(key)) return;
-      seenTl.add(key);
-      dated.push({ id, label, type, date: ds });
+      const normLbl = normalizeLabel(label);
+      const year = extractYear(ds);
+      const dedupeKey = `${year}|${String(type || "").toLowerCase()}|${normLbl.toLowerCase()}`;
+      if (seenTl.has(dedupeKey)) return;
+      seenTl.add(dedupeKey);
+      dated.push({ id, label: normLbl, rawLabel: String(label || ""), type, date: ds, year });
     };
 
     nodes.forEach((n) => {
@@ -36,13 +46,11 @@
       const attrs = d.attributes || {};
       const ef = attrs.extra_fields || {};
       const dt = attrs.date || attrs.published_date || attrs.joined || attrs.created || attrs.created_at || attrs.updated_at;
-      if (dt) {
-        pushDated(d.id, d.type, d.label, String(dt));
-      }
+      if (dt) pushDated(d.id, d.type, d.label, String(dt));
+
       const dob = attrs.dob || ef.dob;
-      if (dob) {
-        pushDated(d.id, "DOB", `${attrs.name || d.label}`, String(dob));
-      }
+      if (dob) pushDated(d.id, "DOB", `${attrs.name || d.label}`, String(dob));
+
       const careerArr = Array.isArray(attrs.career_timeline) ? attrs.career_timeline : (Array.isArray(ef.career_timeline) ? ef.career_timeline : []);
       careerArr.forEach((item) => {
         const s = String(item || "").trim();
@@ -50,6 +58,7 @@
         if (m) pushDated(d.id, "Career", m[2], m[1]);
         else if (s) pushDated(d.id, "Career", s, "Milestone");
       });
+
       const textBlob = [attrs.experience, ef.experience, attrs.education, ef.education, attrs.bio].filter(Boolean).join(" | ");
       if (textBlob) {
         const reMil = /(?:Assistant Professor|Associate Professor|Professor|Ph\.?D\.?|M\.?Tech|B\.?E\.?)[^|.\n]{0,90}?\b((?:19|20)\d{2})\b/gi;
@@ -58,6 +67,7 @@
           pushDated(d.id, "Career", m[0].replace(/\s+/g, " ").trim(), m[1]);
         }
       }
+
       const lat = attrs.lat ?? attrs.latitude;
       const lon = attrs.lon ?? attrs.longitude;
       if (lat != null && lon != null && !Number.isNaN(Number(lat)) && !Number.isNaN(Number(lon))) {
@@ -67,39 +77,61 @@
 
     dated.sort((a, b) => a.date.localeCompare(b.date));
 
+    // Group by year
+    const byYear = new Map();
+    dated.forEach((item) => {
+      if (!byYear.has(item.year)) byYear.set(item.year, []);
+      byYear.get(item.year).push(item);
+    });
+
+    const hasGeo = geoPoints.length > 0;
+
     container.innerHTML = `
-      <div class="grid-2">
-        <div class="card">
-          <div class="field-label" style="margin-bottom: var(--space-3);">Dated Events Timeline (${dated.length})</div>
+      ${!hasGeo ? `
+        <div class="card" style="padding:12px 16px; display:flex; align-items:center; justify-content:space-between; gap:12px;">
+          <span class="field-label" style="margin:0;">Geolocated Places &amp; EXIF GPS (0)</span>
+          <span class="mono" style="font-size:12px; color:var(--text-muted);">No coordinates (places or EXIF GPS) in the current run.</span>
+        </div>
+      ` : ""}
+
+      <div class="${hasGeo ? "grid-2" : ""}">
+        <div class="card" style="display:flex; flex-direction:column; gap:12px;">
+          <div class="field-label" style="margin:0;">Dated Events Timeline (${dated.length} deduplicated)</div>
           ${dated.length ? `
-            <div style="display:flex; flex-direction:column; gap:8px; max-height:420px; overflow-y:auto;">
-              ${dated.map((item) => `
-                <button type="button" class="btn" style="justify-content:space-between; width:100%;" data-tl-node="${esc(item.id)}">
-                  <span class="badge badge-accent">${esc(item.date)}</span>
-                  <span style="overflow:hidden; text-overflow:ellipsis;">${esc(item.type)}: ${esc(item.label)}</span>
-                </button>
+            <div style="display:flex; flex-direction:column; gap:14px;">
+              ${Array.from(byYear.entries()).map(([yr, items]) => `
+                <div class="tl-year-group">
+                  <div class="tl-year-header">${esc(yr)} &middot; ${items.length} event${items.length === 1 ? "" : "s"}</div>
+                  ${items.map((item) => `
+                    <button type="button" class="tl-row" data-tl-node="${esc(item.id)}" data-tooltip="${esc(item.type + ": " + item.label)}">
+                      <span class="badge badge-accent" style="flex-shrink:0; min-width:92px; justify-content:center;">${esc(item.date.slice(0, 10))}</span>
+                      <span class="badge" style="flex-shrink:0;">${esc(item.type)}</span>
+                      <span style="min-width:0; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:13px;">${esc(item.label)}</span>
+                    </button>
+                  `).join("")}
+                </div>
               `).join("")}
             </div>
           ` : `<div class="state-panel">No dated events extracted in the current run.</div>`}
         </div>
 
-        <div class="card">
-          <div class="field-label" style="margin-bottom: var(--space-3);">Geolocated Places &amp; EXIF GPS (${geoPoints.length})</div>
-          ${geoPoints.length ? `
-            <div id="leaflet-map" style="width:100%; height:380px; border-radius:var(--radius-sm); border:1px solid var(--border-subtle);"></div>
-          ` : `<div class="state-panel" style="height:260px; display:flex; align-items:center; justify-content:center;">No coordinates (places or EXIF GPS) in the current run.</div>`}
-        </div>
+        ${hasGeo ? `
+          <div class="card" style="display:flex; flex-direction:column; gap:12px;">
+            <div class="field-label" style="margin:0;">Geolocated Places &amp; EXIF GPS (${geoPoints.length})</div>
+            <div id="leaflet-map" style="width:100%; height:440px; border-radius:var(--radius-sm); border:1px solid var(--border-subtle);"></div>
+          </div>
+        ` : ""}
       </div>
     `;
 
     container.querySelectorAll("[data-tl-node]").forEach((btn) => {
       btn.addEventListener("click", () => {
-        window.OSINT_UI.openInspector(btn.dataset.tlNode);
+        window.OSINT_UI?.openInspector(btn.dataset.tlNode);
       });
     });
 
     const mapEl = document.getElementById("leaflet-map");
-    if (mapEl && geoPoints.length && typeof window.L !== "undefined") {
+    if (mapEl && hasGeo && typeof window.L !== "undefined") {
       if (mapInstance) {
         mapInstance.remove();
         mapInstance = null;
@@ -112,7 +144,7 @@
       geoPoints.forEach((pt) => {
         const marker = window.L.marker([pt.lat, pt.lon]).addTo(mapInstance);
         marker.bindPopup(`<strong>${esc(pt.type)}</strong><br>${esc(pt.label)}`);
-        marker.on("click", () => window.OSINT_UI.openInspector(pt.id));
+        marker.on("click", () => window.OSINT_UI?.openInspector(pt.id));
       });
     }
   }

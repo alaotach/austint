@@ -5,13 +5,8 @@
 
   let activeTab = "overview";
 
-  function esc(str) {
-    return String(str ?? "")
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;");
-  }
+  const esc = (str) => (window.OSINT_UI?.esc ? window.OSINT_UI.esc(str) : String(str ?? "")
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"));
 
   function findNode(nodeId) {
     return (window.OSINT_STATE.nodes || []).find((n) => n.data?.id === nodeId) || null;
@@ -161,7 +156,7 @@
                 <div class="mono" style="font-size:11px; display:flex; justify-content:space-between; margin-bottom:2px;">
                   <span>${esc(k)}</span><span>${Number(v).toFixed(3)}</span>
                 </div>
-                <div class="progress-track"><div class="progress-fill" style="width:${pct}%;"></div></div>
+                <div class="progress-track"><div class="progress-fill" style="--progress:${pct / 100};"></div></div>
               </div>
             `;
           }).join("") : `<div class="state-panel">No per-feature vector recorded for this node.</div>`}
@@ -208,7 +203,7 @@
             <span class="field-label" style="margin:0;">Raw Node JSON</span>
             <button type="button" class="btn btn-sm" id="btn-copy-raw-json">Copy JSON</button>
           </div>
-          <pre class="mono" style="font-size:11px; overflow:auto; max-height:460px; margin:0;">${esc(JSON.stringify(safeObj, null, 2))}</pre>
+          <pre class="json-pretty" style="max-height:460px;">${esc(JSON.stringify(safeObj, null, 2))}</pre>
         </div>
       `;
     }
@@ -239,6 +234,8 @@
         if (navigator.clipboard) {
           navigator.clipboard.writeText(JSON.stringify(sanitizeNodeForDisplay(d), null, 2));
           copyBtn.textContent = "Copied";
+          window.OSINT_UI?.toast("Copied node JSON", "success");
+          setTimeout(() => { copyBtn.textContent = "Copy JSON"; }, 1400);
         }
       });
     }
