@@ -776,6 +776,9 @@ async def collect_sherlock(entity: Entity, client: httpx.AsyncClient) -> list[Hi
         return []
 
     username = entity.value.strip().lstrip("@")
+    if not username or " " in username or not re.fullmatch(r"[A-Za-z0-9._-]{2,64}", username):
+        logger.debug("Skipping sherlock for non-username value: %s", entity.value)
+        return []
     with tempfile.TemporaryDirectory() as tmpdir:
         try:
             proc = await asyncio.create_subprocess_exec(
@@ -864,6 +867,9 @@ async def collect_maigret(entity: Entity, client: httpx.AsyncClient) -> list[Hit
         return []
 
     username = entity.value.strip().lstrip("@")
+    if not username or " " in username or not re.fullmatch(r"[A-Za-z0-9._-]{2,64}", username):
+        logger.debug("Skipping maigret for non-username value: %s", entity.value)
+        return []
 
     # Fast native streaming checker using Maigret's local site rules
     try:
