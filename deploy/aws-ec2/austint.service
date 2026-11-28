@@ -1,0 +1,24 @@
+[Unit]
+Description=Intelligent OSINT (AUSTINT) FastAPI Server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/opt/austint
+EnvironmentFile=-/opt/austint/.env
+# Single worker preserves in-memory job state and live SSE streams
+ExecStart=/opt/austint/.venv/bin/python -m uvicorn osint_agent.api.server:app --host 127.0.0.1 --port 8000 --workers 1 --proxy-headers --forwarded-allow-ips='*'
+Restart=always
+RestartSec=3
+StandardOutput=journal
+StandardError=journal
+
+# Basic hardening
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
