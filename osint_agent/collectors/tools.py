@@ -2783,9 +2783,16 @@ async def collect_exa_search(entity: Entity, client: httpx.AsyncClient) -> list[
 
     deduped: dict[str, tuple[float, dict[str, str]]] = {}
     val_lower = val.lower()
+    _NOISE_DOMAINS = {
+        "pastebin.com", "paste.ee", "ghostbin.com", "rentry.co",
+        "eromexxx.com", "complaintwire.org", "site-bewertungen.com",
+    }
     for q_idx, item in raw_items:
         url = str(item.get("url") or "").strip()
         if not url.startswith(("http://", "https://")):
+            continue
+        host = urlparse(url).netloc.lower().lstrip("www.")
+        if any(host == nd or host.endswith("." + nd) for nd in _NOISE_DOMAINS):
             continue
         norm = url.rstrip("/").lower()
         title = str(item.get("title") or "").strip()

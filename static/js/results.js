@@ -292,28 +292,48 @@
     };
     const isLikelyDomain = (v) => {
       const s = String(v || "").trim().toLowerCase();
-      if (!s || /^(s\.no|m\.tech|b\.tech|b\.e|r\.k\..*|vision\.https)$/.test(s)) return false;
+      if (!s || /^(s\.no|m\.tech|b\.tech|b\.e|r\.k\..*|vision\.https|gmail\.co)$/.test(s)) return false;
       if (/^[a-z]\.[a-z]\./.test(s)) return false;
       if (Array.from(emails).some((em) => em.toLowerCase().startsWith(s + "@"))) return false;
       const tld = s.split(".").pop() || "";
       if (tld.length < 2 || tld.length > 6) return false;
       return true;
     };
+    const isJunkName = (v) => {
+      const s = String(v || "").trim().toLowerCase();
+      return !s || /^(watch|who is email|login|sign in|sign up|home|profile|404|not found)$/i.test(s);
+    };
+    const isJunkEmail = (v) => {
+      const s = String(v || "").trim().toLowerCase();
+      return !s || /^[0-9]{1,4}@/.test(s) || s.endsWith("@yopmail.com") || s.endsWith("@example.com");
+    };
 
-    allNodes.forEach((n) => {
+    const dossierNodes = allNodes.filter((n) => {
+      const d = n.data || {};
+      const lbl = String(d.label || "").toLowerCase();
+      if (/pastebin\.com|eromexxx\.com|complaintwire\.org|site-bewertungen\.com/.test(lbl)) return false;
+      return Number(d.depth ?? 0) === 0 || Number(d.confidence ?? 0) >= 0.4;
+    });
+    const sourceNodes = dossierNodes.length ? dossierNodes : allNodes;
+
+    sourceNodes.forEach((n) => {
       const d = n.data || {};
       const a = d.attributes || {};
       const ef = a.extra_fields || {};
       const srcLabel = a.site || a.source_tool || d.type || "";
       const pageUrl = a.url || (String(d.label || "").startsWith("http") ? d.label : "");
-      if (d.type === "email") addStr(emails, d.label);
+      if (d.type === "email" && !isJunkEmail(d.label)) addStr(emails, d.label);
       if (d.type === "org") addStr(orgs, d.label);
       if (d.type === "domain" && isLikelyDomain(d.label)) addStr(websites, d.label);
       [a.name, a.display_name, ef.legal_name].forEach((x) => {
-        if (x && String(x).trim().toUpperCase() !== "WATCH") addStr(names, x);
+        if (x && !isJunkName(x)) addStr(names, x);
       });
-      [a.email, a.developer_email, a.support_email, ef.developer_email, ef.support_email].forEach((x) => addStr(emails, x));
-      (a.contact_emails || []).forEach((x) => addStr(emails, x));
+      [a.email, a.developer_email, a.support_email, ef.developer_email, ef.support_email].forEach((x) => {
+        if (x && !isJunkEmail(x)) addStr(emails, x);
+      });
+      (a.contact_emails || []).forEach((x) => {
+        if (x && !isJunkEmail(x)) addStr(emails, x);
+      });
       (a.phone_numbers || []).forEach((x) => addStr(phones, x));
       [a.location, a.office_address, ef.office_address, a.country].forEach((x) => addStr(locations, x));
       [a.company, a.developer_name, ef.developer_name].forEach((x) => addStr(orgs, x));
