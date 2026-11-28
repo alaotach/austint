@@ -68,7 +68,7 @@
         ...(Array.isArray(attrs.images) ? attrs.images : []),
       ].filter((u) => typeof u === "string" && u.startsWith("http"))));
       tabContent = `
-        <div class="grid-2" style="margin-bottom: var(--space-4);">
+        <div class="grid-2">
           <div class="card">
             <div class="kpi-label">Calibrated Confidence</div>
             <div class="kpi-value">${Math.round(conf * 100)}%</div>
@@ -79,40 +79,40 @@
           </div>
         </div>
         ${imgs.length ? `
-          <div class="card" style="margin-bottom: var(--space-3);">
-            <div class="field-label" style="margin-bottom:8px;">Images &amp; Media (${imgs.length})</div>
-            <div style="display:flex; flex-wrap:wrap; gap:8px;">
+          <div class="card">
+            <div class="field-label" style="margin-bottom:10px;">Images &amp; Media (${imgs.length})</div>
+            <div style="display:flex; flex-wrap:wrap; gap:10px;">
               ${imgs.slice(0, 10).map((u) => `
-                <a href="${esc(u)}" target="_blank" rel="noopener noreferrer" title="${esc(u)}" style="display:inline-block; border:1px solid var(--border-strong); border-radius:6px; overflow:hidden; background:var(--bg-elevated);">
-                  <img src="${esc(u)}" alt="" loading="lazy" onerror="this.parentElement.style.display='none'" style="width:64px; height:64px; object-fit:cover; display:block;">
+                <a href="${esc(u)}" target="_blank" rel="noopener noreferrer" title="${esc(u)}" style="display:inline-block; width:64px; height:64px; flex-shrink:0; border:1px solid var(--border-strong); border-radius:var(--radius-sm); overflow:hidden; background:var(--bg-elevated);">
+                  <img src="${esc(u)}" alt="" loading="lazy" onerror="this.parentElement.style.display='none'" style="width:100%; height:100%; object-fit:cover; display:block;">
                 </a>
               `).join("")}
             </div>
           </div>
         ` : ""}
-        <div class="card" style="margin-bottom: var(--space-3);">
+        <div class="card">
           <div class="field-label" style="margin-bottom:8px;">Extracted Public Fields</div>
-          ${kvRows.length ? kvRows.map(([k, v]) => {
+          ${kvRows.length ? `<div class="result-kv-list">${kvRows.map(([k, v]) => {
             const valHtml = typeof v === "string" && /^https?:\/\//i.test(v)
               ? `<a href="${esc(v)}" target="_blank" rel="noopener noreferrer" style="color:var(--accent);">${esc(v)}</a>`
               : esc(typeof v === "object" ? JSON.stringify(v) : v);
             return `
-            <div class="mono" style="font-size:12px; display:flex; justify-content:space-between; gap:8px; padding:4px 0; border-bottom:1px solid var(--border-subtle);">
-              <span style="color:var(--text-muted);">${esc(k)}</span>
-              <span style="text-align:right; word-break:break-word; max-width:65%;">${valHtml}</span>
+            <div class="result-kv-row">
+              <span style="color:var(--text-muted); flex-shrink:0;">${esc(k)}</span>
+              <span style="text-align:right; word-break:break-word; max-width:66%; color:var(--text-primary);">${valHtml}</span>
             </div>`;
-          }).join("") : `<div class="state-panel">Sparse node: no additional public fields.</div>`}
+          }).join("")}</div>` : `<div class="state-panel">Sparse node: no additional public fields.</div>`}
         </div>
       `;
     } else if (activeTab === "evidence") {
       const prov = d.provenance || [];
       tabContent = `
-        <div class="card" style="margin-bottom: var(--space-3);">
-          <div class="field-label" style="margin-bottom:8px;">Provenance Chain</div>
+        <div class="card">
+          <div class="field-label" style="margin-bottom:10px;">Provenance Chain</div>
           ${prov.length ? `
             <div style="display:flex; flex-direction:column; gap:6px;">
               ${prov.map((step, i) => `
-                <div class="mono" style="font-size:12px; padding:6px 8px; background:var(--bg-elevated); border-radius:4px;">
+                <div class="mono" style="font-size:12px; padding:7px 10px; background:var(--bg-elevated); border:1px solid var(--border-subtle); border-radius:var(--radius-sm);">
                   [${i + 1}] ${esc(step)}
                 </div>
               `).join("")}
@@ -121,8 +121,10 @@
         </div>
         <div class="card">
           <div class="field-label" style="margin-bottom:8px;">Source Collector Metadata</div>
-          <div class="mono" style="font-size:12px;">source_tool: ${esc(attrs.source_tool || "seed")}</div>
-          <div class="mono" style="font-size:12px;">site: ${esc(attrs.site || "--")}</div>
+          <div class="result-kv-list">
+            <div class="result-kv-row"><span style="color:var(--text-muted);">source_tool</span><span>${esc(attrs.source_tool || "seed")}</span></div>
+            <div class="result-kv-row"><span style="color:var(--text-muted);">site</span><span>${esc(attrs.site || "--")}</span></div>
+          </div>
         </div>
       `;
     } else if (activeTab === "ml") {
@@ -133,7 +135,7 @@
       const keywords = attrs.keywords || attrs.skills || [];
       const entities = attrs.entities || [];
       tabContent = `
-        <div class="grid-3" style="margin-bottom: var(--space-3);">
+        <div class="grid-3">
           <div class="card">
             <div class="kpi-label">Pairwise Score</div>
             <div class="kpi-value">${pairwise != null ? Number(pairwise).toFixed(3) : "--"}</div>
@@ -147,8 +149,8 @@
             <div class="kpi-value">${chain != null ? Number(chain).toFixed(3) : "--"}</div>
           </div>
         </div>
-        <div class="card" style="margin-bottom: var(--space-3);">
-          <div class="field-label" style="margin-bottom:8px;">Resolver Feature Contributions</div>
+        <div class="card">
+          <div class="field-label" style="margin-bottom:10px;">Resolver Feature Contributions</div>
           ${Object.keys(feats).length ? Object.entries(feats).map(([k, v]) => {
             const pct = Math.min(100, Math.max(0, Math.round(Number(v) * 100)));
             return `
@@ -162,10 +164,10 @@
           }).join("") : `<div class="state-panel">No per-feature vector recorded for this node.</div>`}
         </div>
         <div class="card">
-          <div class="field-label" style="margin-bottom:6px;">ML Summary, Keywords &amp; Cluster</div>
-          <div class="mono" style="font-size:12px; margin-bottom:6px;">cluster_id: ${esc(attrs.cluster_id ?? "unassigned")}</div>
+          <div class="field-label" style="margin-bottom:8px;">ML Summary, Keywords &amp; Cluster</div>
+          <div class="mono" style="font-size:12px; margin-bottom:8px;">cluster_id: ${esc(attrs.cluster_id ?? "unassigned")}</div>
           ${attrs.ml_summary ? `<p style="font-size:12px; margin:0 0 8px 0;">${esc(attrs.ml_summary)}</p>` : ""}
-          <div style="display:flex; flex-wrap:wrap; gap:4px;">
+          <div style="display:flex; flex-wrap:wrap; gap:6px;">
             ${keywords.map((k) => `<span class="chip badge-accent">${esc(k)}</span>`).join("")}
             ${entities.map((e) => `<span class="chip">${esc(typeof e === "object" ? e.text || JSON.stringify(e) : e)}</span>`).join("")}
           </div>
@@ -209,7 +211,7 @@
     }
 
     bodyEl.innerHTML = `
-      <div class="tab-bar" role="tablist" style="margin-bottom: var(--space-4);">
+      <div class="tab-bar" role="tablist">
         ${tabs.map((t) => `<button type="button" class="tab-btn ${activeTab === t.id ? "active" : ""}" data-itab="${t.id}">${esc(t.label)}</button>`).join("")}
       </div>
       ${tabContent}
