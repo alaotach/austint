@@ -1059,7 +1059,7 @@ async def collect_email_intel(entity: Entity, client: httpx.AsyncClient) -> list
                     discovered_value=v,
                     relation="email_local_part",
                     source_tool="email_intel",
-                    is_trusted=False,
+                    is_trusted=True,
                     raw_data={"email": email, "variant": v},
                     metadata={"username": v, "email": email},
                 )
